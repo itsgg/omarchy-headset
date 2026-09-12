@@ -241,6 +241,7 @@ make test        # Python, the same suite with nothing installed, and Model.js
 make lint        # Qt 6 qmllint with Quickshell's import alias
 make reload      # install, clear the QML cache, restart the shell
 python3 tools/verify.py <address>   # write, reconnect, read back
+python3 tools/shots.py <name>       # docs/<name>.png, cropped to the panel
 ```
 
 Two things worth knowing before you debug the wrong code, both learned the hard
