@@ -75,7 +75,7 @@ replaced, and everything it creates is gone at logout however it shut down.
 
 - Omarchy with its Quickshell bar, tested on **4.0.3-1**.
 - Python 3 and BlueZ, both already on the system. Standard library only: nothing
-  to compile, nothing to pip install, no D-Bus bindings.
+  to compile, no packages to add, no D-Bus bindings.
 - PipeWire, for the codec and profile rows and for the equaliser this machine
   runs. The equaliser also needs PipeWire's filter-chain module, which is part
   of the stock `pipewire` package on Arch and is at
