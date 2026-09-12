@@ -7,6 +7,8 @@ Item {
 
   property var spec: ({})
   property var status: ({})
+  // Why this row cannot be changed, or why the last attempt was refused.
+  property string reason: ""
   property QtObject theme: null
   property QtObject bar: null
   property bool hasCursor: false
@@ -28,5 +30,11 @@ Item {
       ? (root.status.value ? "On" : "Off")
       : (root.status.value === undefined || root.status.value === null ? "" : String(root.status.value))
     theme: root.theme
+  }
+
+  // Only ever a refusal here: there is no standing hint on this kind of row.
+  ReasonLine {
+    theme: root.theme
+    reason: root.reason
   }
 }

@@ -203,11 +203,32 @@ test("hero meta explains a missing session instead of going blank", () => {
 });
 
 test("a band edit restates every band, so none can drift", () => {
-  const bands = plain(M.bandsWith(xm5.state, 2, 4));
+  const bands = plain(M.bandsWith(xm5.state, "eq_bands", 2, 5, 4, 1));
   assert.equal(bands.length, 5);
   assert.deepEqual(bands, [0, 5, 4, 7, 9]);
-  assert.deepEqual(plain(M.bandsWith({}, 0, 99)), [10, 0, 0, 0, 0]);
-  assert.deepEqual(plain(M.bandsWith({}, 0, -99)), [-10, 0, 0, 0, 0]);
+  assert.deepEqual(plain(M.bandsWith({}, "eq_bands", 0, 5, 99, 1)), [10, 0, 0, 0, 0]);
+  assert.deepEqual(plain(M.bandsWith({}, "eq_bands", 0, 5, -99, 1)), [-10, 0, 0, 0, 0]);
+});
+
+test("the ten-band equaliser gets ten bands and half-decibel steps", () => {
+  // Two equalisers with different band counts, and the panel should not have to
+  // know which one it is drawing.
+  const host = { eq_gains: [6, 4, 0, 0, -2, 0, 2, 3, 4, 2] };
+  const out = plain(M.bandsWith(host, "eq_gains", 3, 10, 1.4, 0.5));
+  assert.equal(out.length, 10);
+  assert.equal(out[3], 1.5);
+  assert.deepEqual(plain(M.bandsWith({}, "eq_gains", 0, 10, 0, 0.5)).length, 10);
+});
+
+test("both equalisers carry their own bands in the spec", () => {
+  const rowIn = (section, id) =>
+    M.SECTIONS.find((s) => s.id === section).rows.find((r) => r.id === id);
+  const sony = plain(rowIn("equalizer", "eq").bands);
+  assert.equal(sony.labels.length, 5);
+  assert.equal(sony.extra.feature, "eq_clear_bass");
+  const host = plain(rowIn("host_equaliser", "eq_gains").bands);
+  assert.equal(host.labels.length, 10);
+  assert.equal(host.extra, undefined);
 });
 
 test("an unknown preset reported by a device is still offered", () => {
@@ -306,4 +327,122 @@ test("the keyboard hint promises only keys this panel has", () => {
 
 test("set commands are the wire format the helper parses", () => {
   assert.equal(M.setCommand({ noise: "anc" }), '{"set":{"noise":"anc"}}');
+});
+
+test("panel copy fits the width it is given, so no line wraps awkwardly", () => {
+  // The panel is about 380 logical pixels wide. A description sits beside its
+  // control and has roughly 40 characters before it wraps and shoves the switch
+  // around; a reason or hint has the full width and roughly 54. These are the
+  // budget, checked here because every previous fix for this was one string at a
+  // time and the next person adding a row would not know the limit existed.
+  const DESCRIPTION = 40;
+  const FULL_WIDTH = 54;
+  const over = [];
+  for (const section of M.SECTIONS) {
+    for (const row of section.rows) {
+      if (row.description && row.description.length > DESCRIPTION) {
+        over.push(`${row.id} description ${row.description.length} > ${DESCRIPTION}`);
+      }
+      for (const key of ["hint", "unavailableHint"]) {
+        if (row[key] && row[key].length > FULL_WIDTH) {
+          over.push(`${row.id} ${key} ${row[key].length} > ${FULL_WIDTH}`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(over, []);
+});
+
+test("a reason for one row is shown on that row and beats the standing hint", () => {
+  // A single line at the foot of the panel cannot say which of nine settings it
+  // is about, and it used to stay there through everything the user did next.
+  const row = { id: "noise", unavailableHint: "Only applies in ambient mode" };
+  const payload = {
+    controls: { noise: { supported: true, writable: true, available: false } },
+    refused: { noise: "This headset does not have this setting" }
+  };
+  const status = plain(M.rowState(row, payload));
+  assert.equal(status.refused, "This headset does not have this setting");
+  assert.equal(M.rowReason(row, status), "This headset does not have this setting");
+});
+
+test("with nothing refused the row falls back to why it is inactive", () => {
+  const row = { id: "ambient_level", unavailableHint: "Only applies in ambient mode" };
+  const payload = { controls: { ambient_level: { supported: true, writable: true, available: false } } };
+  const status = plain(M.rowState(row, payload));
+  assert.equal(status.refused, "");
+  assert.equal(M.rowReason(row, status), "Only applies in ambient mode");
+});
+
+test("a row the headset reports but will not change says so", () => {
+  const row = { id: "touch_sensor" };
+  const payload = { controls: { touch_sensor: { supported: true, writable: false, available: true } } };
+  const reason = M.rowReason(row, plain(M.rowState(row, payload)));
+  assert.match(reason, /does not accept changes/);
+});
+
+test("a row with nothing wrong says nothing", () => {
+  const row = { id: "noise", unavailableHint: "Only applies in ambient mode" };
+  const payload = { controls: { noise: { supported: true, writable: true, available: true } } };
+  assert.equal(M.rowReason(row, plain(M.rowState(row, payload))), "");
+});
+
+test("every reason the panel can show also fits the width", () => {
+  const wide = { id: "x", unavailableHint: "" };
+  const cases = [
+    { controls: { x: { supported: true, writable: true, available: true } }, refused: {} },
+    { controls: { x: { supported: true, writable: false, available: true } } },
+    { controls: { x: { supported: true, writable: true, available: true } }, ignored: ["x"] }
+  ];
+  for (const payload of cases) {
+    const reason = M.rowReason(wide, plain(M.rowState(wide, payload)));
+    assert.ok(reason.length <= 54, `${reason.length}: ${reason}`);
+  }
+});
+
+test("a readout is not told off for refusing changes it never accepted", () => {
+  // Every readout is unwritable by definition, so the generic line would sit
+  // under the firmware version of every headset.
+  const row = { id: "firmware", kind: "readout" };
+  const payload = { support: { firmware: true }, controls: {} };
+  assert.equal(M.rowReason(row, plain(M.rowState(row, payload))), "");
+});
+
+test("what the panel shows starts with a capital, wherever it came from", () => {
+  // The helper's strings double as journal lines and start lowercase; the
+  // panel's own start capitalised. The case is settled where they are shown.
+  assert.equal(M.sentence("the headset is not connected"), "The headset is not connected");
+  assert.equal(M.sentence("This headset does not have this setting"),
+               "This headset does not have this setting");
+  assert.equal(M.sentence(""), "");
+  assert.equal(M.sentence(null), "");
+  const row = { id: "noise" };
+  const payload = { controls: { noise: { supported: true, writable: true, available: true } },
+                    refused: { noise: "the headset is not connected" } };
+  assert.equal(M.rowReason(row, plain(M.rowState(row, payload))),
+               "The headset is not connected");
+});
+
+test("the equaliser offers presets, from the list the helper reports", () => {
+  // Ten bands is more knobs than anyone turns before hearing anything.
+  const row = M.SECTIONS.find((s) => s.id === "host_equaliser")
+    .rows.find((r) => r.id === "eq_preset_host");
+  assert.ok(row);
+  const payload = { equaliser: { eq_presets: ["Flat", "Bass", "Vocal"] }, audio: { codecs: ["AAC"] } };
+  assert.deepEqual(plain(M.optionsFor(row, payload)), ["Flat", "Bass", "Vocal"]);
+  // And a row that reads the audio instead is not disturbed by that.
+  const codec = M.SECTIONS.find((s) => s.id === "audio").rows.find((r) => r.id === "codec");
+  assert.deepEqual(plain(M.optionsFor(codec, payload)), ["AAC"]);
+});
+
+test("a standing hint is a warning, never a description of the row above it", () => {
+  // Every row carrying a caption made the panel read as documentation. A hint
+  // earns its place only by saying something the control cannot show: what
+  // happens as a consequence. What a row is comes from its label.
+  const hints = [];
+  for (const section of M.SECTIONS) {
+    for (const row of section.rows) if (row.hint) hints.push(`${row.id}: ${row.hint}`);
+  }
+  assert.equal(hints.length, 2, hints.join(" | "));
+  for (const hint of hints) assert.match(hint, /selects Manual|reconnects/);
 });

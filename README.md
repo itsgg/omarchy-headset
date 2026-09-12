@@ -10,19 +10,20 @@ No vendor app, no daemon to install, no root, no udev rule.
 
 <img src="docs/panel.png" alt="The headset panel: noise control, equaliser and behaviour settings" width="380">
 
-## Two tiers, and why
+## Three tiers, and why
 
 Bluetooth standardises the audio, not the headset. There is no vendor-neutral way
-to control noise cancelling or an equaliser, which I checked rather than assumed:
-nothing in PipeWire's Bluetooth plugin relates to either, and the single
-"Equalizer" string in `bluetoothd` is an AVRCP player setting pointing the other
-way, at your music player, on or off, no bands.
+to reach the noise cancelling or the equaliser inside a pair of headphones, which
+I checked rather than assumed: nothing in PipeWire's Bluetooth plugin relates to
+either, and the single "Equalizer" string in `bluetoothd` is an AVRCP player
+setting pointing the other way, at your music player, on or off, no bands. An
+equaliser can still be run on this end of the link, and is.
 
 So the panel is built in three tiers, and takes the best one the headset offers.
 
 | | What you get | Where it comes from |
 | --- | --- | --- |
-| **Every headset** | Battery, the codec in use and the choice of codec, music-or-calls mode, microphone | BlueZ and PipeWire, no vendor protocol |
+| **Every headset** | Battery, the codec in use and the choice of codec, music-or-calls mode, microphone, a ten-band equaliser | BlueZ and PipeWire, no vendor protocol |
 | **Fast Pair** | Battery per earbud and per case, and noise control where the headset has it | Google's Message Stream, which unrelated manufacturers implement |
 | **Vendor driver** | Ambient sound, equaliser, speak-to-chat, pause on removal, voice guidance, DSEE, power off | The manufacturer's own protocol |
 
@@ -37,6 +38,38 @@ the first open implementation of that extension on Linux.
 One vendor driver ships, Sony MDR over RFCOMM, and every byte of it was read off
 a WH-1000XM5. A headset with no driver still gets a useful panel rather than
 nothing, which is the point of the split.
+
+## The equaliser
+
+Bluetooth standardises no equaliser, so a headset without a vendor protocol has
+none this machine can reach. It can have one anyway. PipeWire will run a filter
+chain, and the audio can be sent through it on the way out, so the processing
+happens here rather than in the earcups. That is the only difference that
+matters, and it works on anything.
+
+Ten bands an octave apart, 32 Hz to 16 kHz, plus or minus 10 dB in half-decibel
+steps, and five named curves to start from: Flat, Bass, Vocal, Treble, Podcast.
+The name is read back off the bands rather than remembered beside them, so
+moving one band says Custom and a preset can never claim a sound the headset is
+not making.
+
+Boosting bands and passing the result on unchanged is how a filter chain clips,
+so a trim at the end takes the boost back and the loudest thing through the
+chain is no louder than it went in. The trim is measured rather than
+guessed: neighbouring peaking filters overlap, and two bands raised 10 dB each
+sum to 13 dB between them, so taking back the tallest band alone would still
+clip. It is measured at both 44.1 and 48 kHz and the louder wins, because
+PipeWire recomputes the filters at whatever the graph negotiated.
+
+It is offered only where the headset has no equaliser of its own. A Sony has one
+in the earcups, and two equalisers in one panel is a question nobody should have
+to answer.
+
+The curve is remembered per headset and comes back when the headset does, which
+matters because a reconnect is the normal case rather than the exception. The
+chain runs as its own short-lived PipeWire client from a private directory under
+`$XDG_RUNTIME_DIR`. Nothing of your PipeWire configuration is read, written or
+replaced, and everything it creates is gone at logout however it shut down.
 
 ## Compatibility
 
@@ -94,6 +127,7 @@ it recognises is connected, and disappears when it is not.
 | Panel | `j` `k` | Move between rows |
 | Panel | `h` `l` | Adjust the row, or pick a band on the equaliser |
 | Panel | `+` `-` | Change the value, including one equaliser band |
+| Panel | Scroll | Change a band, on either equaliser |
 | Panel | `r` / `Esc` | Re-read the headset / close |
 
 Bind the panel to a key:
@@ -195,7 +229,7 @@ bytes behind every decoder.
 ## Development
 
 ```sh
-make check       # everything CI runs: tests, manifest, omarchy validate
+make check       # everything CI runs: tests, lint, manifest, omarchy validate
 make test        # Python, and Model.js under node
 make lint        # Qt 6 qmllint with Quickshell's import alias
 make reload      # install, clear the QML cache, restart the shell
@@ -210,6 +244,13 @@ so `make reload` clears it and restarts.
 
 The tests carry the bytes this headset actually sent, so a decoder that drifts
 from the hardware fails rather than quietly showing the wrong thing.
+
+`make lint` is in `make check` because it was not, and a widget that could not
+load at all once passed a green check: every Python and JavaScript test passes
+on QML the shell then refuses. The linter fails on an assignment to a property
+that does not exist on one of these components, which is that failure, while
+still ignoring members of the objects the shell injects at load time, which it
+cannot see into.
 
 ## Removing it
 

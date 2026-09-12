@@ -113,6 +113,12 @@ Panel {
                            pending: [], ignored: [], error: "" })
   property bool unsupported: false
   property string helperError: ""
+  // The helper's last journal line, kept for the journal's sake and shown only
+  // before the helper has ever published a state of its own.
+  property string helperLog: ""
+  // Whether any state has arrived from this helper. Until it has, its stderr is
+  // the only evidence there is.
+  property bool everPublished: false
   property int restartDelay: 1000
 
   // Named `reading`, not `state`: every Item already has a `state` property,
@@ -182,7 +188,7 @@ Panel {
   // The one line the panel has to say about itself. Two separate Texts each
   // claiming the same string printed a dropped link twice, one above the other.
   readonly property string notice: {
-    var reported = String(payload.error || "") || root.helperError
+    var reported = Model.sentence(String(payload.error || "") || root.helperError)
     if (root.unsupported) return reported && reported.indexOf("no driver") === -1 ? reported : ""
     if (!root.live) return reported || "Waiting for the headset's control channel."
     return reported
@@ -295,6 +301,11 @@ Panel {
       return
     }
     root.payload = next
+    // From here on the payload is the only thing the panel says. Its `error` and
+    // its per-setting reasons are retracted by the next action; a journal line
+    // is not, which is what made one linger through everything done after it.
+    root.everPublished = true
+    root.helperError = ""
     root.restartDelay = 1000
     if (next.connected) root.helperError = ""
   }
@@ -405,14 +416,31 @@ Panel {
     running: root.headsetAddress !== "" && !root.unsupported
     stdinEnabled: true
     stdout: SplitParser { onRead: function(line) { root.consume(line) } }
+    // The helper's stderr is its journal, not a channel to the panel. It carries
+    // progress as well as faults ("equaliser running as ..."), and mirroring it
+    // into the notice put a line of log in front of the user on every successful
+    // action, which flashed and then cleared. What the user must see travels in
+    // the payload, where it belongs to a setting and is retracted by the next
+    // action. The journal is kept for the one case the payload cannot cover: a
+    // helper that failed before it ever published anything.
     stderr: SplitParser {
       onRead: function(line) {
         var text = String(line || "").trim()
-        if (text.length > 0) root.helperError = text.replace(/^omarchy-headset: /, "")
+        if (text.length === 0) return
+        root.helperLog = text.replace(/^omarchy-headset: /, "")
+        if (!root.everPublished) root.helperError = root.helperLog
       }
     }
     onExited: function(code) {
       root.payload = Object.assign({}, root.payload, { connected: false, write_ready: false })
+      // The last journal line is not shown here. A helper killed outright writes
+      // nothing on its way out, so the line still standing is whatever it last
+      // did successfully, and presenting that as the reason it died says the
+      // opposite of what happened. The payload above already says the headset is
+      // not connected, which is the true and useful part; the journal has the
+      // rest. Before the first publish there is no payload, and only then is the
+      // journal shown, which the stderr handler does.
+      root.everPublished = false
       if (!root.unsupported && root.headsetAddress !== "") restartTimer.restart()
     }
   }

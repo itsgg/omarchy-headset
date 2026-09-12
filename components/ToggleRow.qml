@@ -8,6 +8,8 @@ Item {
 
   property var spec: ({})
   property var status: ({})
+  // Why this row cannot be changed, or why the last attempt was refused.
+  property string reason: ""
   property QtObject theme: null
   property QtObject bar: null
   property bool hasCursor: false
@@ -33,14 +35,6 @@ Item {
     root.activate()
   }
 
-  readonly property string reason: root.status.ignored
-    ? "This headset accepts this and does not act on it"
-    : (root.status.supported && !root.status.writable)
-      ? "This headset reports this and does not accept changes"
-      : (root.status.available === false && root.spec.unavailableHint)
-        ? root.spec.unavailableHint
-        : ""
-
   Column {
     id: column
     width: parent.width
@@ -61,18 +55,9 @@ Item {
       onClicked: root.activate()
     }
 
-    // Outside the dimmed control on purpose: this is the sentence that explains
-    // the dimming, and it is the last text that should be hard to read.
-    Text {
-      visible: root.reason !== ""
-      width: parent.width
-      text: root.reason
-      textFormat: Text.PlainText
-      color: root.theme ? root.theme.dim : "#888"
-      font.family: root.theme ? root.theme.fontFamily : Style.font.family
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.WordWrap
-      leftPadding: Style.space(6)
+    ReasonLine {
+      theme: root.theme
+      reason: root.reason
     }
   }
 }

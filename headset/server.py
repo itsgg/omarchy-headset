@@ -20,7 +20,7 @@ import socket
 import sys
 import time
 
-from . import drivers, ipc
+from . import audio, drivers, equaliser, ipc
 from .device import Device
 from .errors import HeadsetError, UnsupportedDevice
 from .state import State
@@ -168,6 +168,11 @@ class Owner:
         self.state = State()
         self.device: Device | None = None
         self.error = ""
+        # Why a particular setting was refused, keyed by the setting. A reason
+        # that belongs to one row is shown on that row: a single line at the foot
+        # of the panel cannot say which of nine settings it is about, and it
+        # outlives the action that caused it.
+        self.refused: dict = {}
         self.backoff = BACKOFF_START
         self.next_attempt = 0.0
         self.next_poll: dict[str, float] = {}
@@ -179,6 +184,16 @@ class Owner:
         # What the panel was last told had gone unanswered, so a write giving up
         # is published even though no reading arrived to prompt it.
         self.reported_ignored: list = []
+        # An equaliser this machine runs, for a headset whose own hardware has
+        # none. Offered only where the driver has no equaliser of its own: two in
+        # one panel is a question nobody should have to answer.
+        self.equaliser = equaliser.Equaliser(address, name, on_log=_log)
+        self.host_equaliser = not any(c.id == "eq_bands" for c in self.driver.controls)
+        # Not before this, so a sink that is a moment behind bluez is waited for.
+        self.restore_after = 0.0
+        self.restored = False
+        # How many checks in a row have found no sink for this headset.
+        self.sink_missing = 0
         # True while the opening read is still in flight. Publishing during it
         # shows a panel a device that is connected and has no settings yet.
         self.quiet = False
@@ -197,6 +212,18 @@ class Owner:
                 "writable": supported and control.honoured,
                 "available": supported and (control.available is None or control.available(snapshot)),
             }
+        sound = {}
+        if self.host_equaliser and self.equaliser.available():
+            sound = self.equaliser.state()
+            controls["eq_enabled"] = {"supported": True, "writable": True, "available": True}
+            controls["eq_gains"] = {"supported": True, "writable": True,
+                                    "available": bool(sound.get("eq_enabled"))}
+            controls["eq_preset_host"] = {"supported": True, "writable": True,
+                                          "available": bool(sound.get("eq_enabled"))}
+            sound = dict(sound)
+            sound["eq_preset_host"] = sound.pop("eq_preset", "")
+            snapshot = dict(snapshot)
+            snapshot.update(sound)
         return {
             "type": "state",
             "version": self.version,
@@ -211,10 +238,12 @@ class Owner:
             "support": dict(device.support) if device else {},
             "controls": controls,
             "state": snapshot,
+            "equaliser": sound,
             "pending": self.state.unconfirmed(),
             "ignored": self.state.ignored(),
             "unsupported": self.hopeless,
             "error": self.error,
+            "refused": dict(self.refused),
         }
 
     def publish(self) -> None:
@@ -272,8 +301,127 @@ class Owner:
 
     # ------------------------------------------------------------------- commands
 
+    def apply_equaliser(self, values: dict) -> bool:
+        """The equaliser this machine runs. Nothing here reaches the headset."""
+        wanted = {k: v for k, v in values.items()
+                  if k in ("eq_enabled", "eq_gains", "eq_preset_host")}
+        if not wanted:
+            return False
+        if not self.host_equaliser:
+            self._refuse(wanted, "This headset has an equaliser of its own")
+            self.publish()
+            return True
+        if not self.equaliser.available():
+            # The opposite of the message above, and it used to send that one.
+            self._refuse(wanted, "PipeWire here cannot run an equaliser")
+            self.publish()
+            return True
+        # Into the headset itself, never into the equaliser's own sink. A card
+        # name cannot be turned into a sink name by string surgery, so the sink
+        # is looked up, and if it is not there yet the equaliser says so.
+        # A preset is a curve, so it arrives as one. Nothing stores which preset
+        # is selected: the name is read back off the gains, and the two cannot
+        # drift apart the way a remembered name drifts from a hand-moved band.
+        gains = wanted.get("eq_gains")
+        if "eq_preset_host" in wanted:
+            curve = equaliser.curve_for(str(wanted["eq_preset_host"]))
+            if curve is None:
+                # Only the preset. One command can carry the switch as well, and
+                # answering "there is no such preset" to an on/off switch is both
+                # nonsense and a refusal of something that was perfectly valid.
+                self._refuse({"eq_preset_host": None}, "There is no such preset")
+            else:
+                gains = list(curve)
+        try:
+            self.equaliser.apply(self.sink_name(),
+                                 enabled=wanted.get("eq_enabled"),
+                                 gains=gains)
+        except HeadsetError as error:
+            self._refuse(wanted, str(error))
+        self.publish()
+        return True
+
+    def _refuse(self, wanted: dict, reason: str) -> None:
+        """Say why, on the rows it is about rather than at the foot of the panel."""
+        for feature in wanted:
+            self.refused[feature] = reason
+
+    def tend_equaliser(self) -> None:
+        """Keep the equaliser matching what is actually there, once a loop pass.
+
+        Three things, none of which the user should have to do by hand: clear a
+        chain that outlived the helper that started it, switch a saved equaliser
+        back on when the headset comes back, and shut one down when the headset
+        it was playing into has gone.
+        """
+        if not self.host_equaliser or not self.equaliser.available():
+            return
+        if not self.restored:
+            # A chain is a separate process and survives a helper that was killed
+            # outright, so the audio can still be going through a curve nothing
+            # owns while the panel reports the equaliser off. Clear it once at
+            # startup, whether or not one is wanted now.
+            self.restored = True
+            self.equaliser.reap_strays()
+        # Cheap and every pass: the routing waits for the chain's sink here
+        # rather than in a sleep, so that nothing else has to wait for it.
+        self.equaliser.settle()
+        self.equaliser.bury_the_dead()
+        if not self.equaliser.enabled:
+            return
+        now = time.monotonic()
+        if now < self.restore_after:
+            return
+        self.restore_after = now + 2.0
+        sink = self.sink_name()
+        if self.equaliser.running:
+            # The headset went away underneath a running chain. Audio is going
+            # into a sink whose own output points at nothing, which is silence
+            # with no obvious way back, so take the chain out of the path.
+            #
+            # Twice in a row, though, never once: a codec change tears the
+            # transport down and builds it again, so the sink is missing for a
+            # moment in the middle of something the panel itself offers. Acting
+            # on the first look would stop the equaliser during a codec change
+            # and start it again four seconds later.
+            self.sink_missing = self.sink_missing + 1 if not sink else 0
+            if self.sink_missing >= 2:
+                self.sink_missing = 0
+                self.equaliser.stop()
+                _log("the headset's audio went away, so the equaliser stopped")
+                self.publish()
+            return
+        if not sink:
+            return
+        try:
+            self.equaliser.apply(sink)
+            # The reason it could not start is not true any more. A message that
+            # outlives the thing it described is the fault this whole map exists
+            # to avoid, and nothing else clears it: this is not a command.
+            self.refused.pop("eq_enabled", None)
+            self.refused.pop("eq_gains", None)
+            _log("equaliser switched back on, as it was left")
+        except HeadsetError as error:
+            # Say it once. A sink that never arrives should not fill the journal.
+            self.equaliser.enabled = False
+            _log(f"could not restore the equaliser: {error}")
+        self.publish()
+
+    def sink_name(self) -> str:
+        """The headset's own audio sink, which is where the equaliser sends."""
+        with contextlib.suppress(HeadsetError):
+            for line in audio.run_pactl(["list", "sinks", "short"]).splitlines():
+                fields = line.split()
+                if len(fields) > 1 and self.address.replace(":", "_").upper() in fields[1].upper():
+                    return fields[1]
+        return ""
+
     def apply(self, values: dict) -> None:
         """Write features, one frame per group of features that share a message."""
+        if self.apply_equaliser(values):
+            values = {k: v for k, v in values.items() if k not in ("eq_enabled", "eq_gains")}
+            if not values:
+                return
         if self.device is None:
             self.error = "the headset is not connected"
             self.publish()
@@ -281,19 +429,19 @@ class Owner:
         snapshot = dict(self.state.snapshot())
         snapshot.update(values)
         groups: dict[str, dict] = {}
-        problems = []
+        problems: dict = {}
         for feature, value in values.items():
             control = self.driver.control(feature)
             if control is None or not self.device.supports(feature):
-                problems.append(f"this headset has no {feature.replace('_', ' ')}")
+                problems[feature] = "This headset does not have this setting"
                 continue
             if not control.honoured:
-                problems.append(f"{feature.replace('_', ' ')} is read-only on this headset")
+                problems[feature] = "This headset reports this and does not accept changes"
                 continue
             if control.available is not None and not control.available(snapshot):
                 # The device takes these and discards them outside the right mode,
                 # so refusing plainly beats writing into a void.
-                problems.append(f"{feature.replace('_', ' ')} only applies in ambient mode")
+                problems[feature] = "Only applies in ambient mode"
                 continue
             # Keyed by the encoder as well as the coalescing key: two controls
             # can share a key and still be different messages, and grouping them
@@ -307,15 +455,25 @@ class Owner:
             try:
                 message_type, frame = control.encode(group["values"], self.state.snapshot())
             except (ValueError, TypeError) as error:
-                problems.append(str(error))
+                for feature in group["values"]:
+                    problems[feature] = str(error)
                 continue
             self.device.session.set(frame, message_type, key=control.key,
                                     label=f"set {control.id}")
             self.state.expect(group["values"])
-        self.error = "; ".join(problems)
+        # Merged, not replaced: one command can carry both an equaliser setting
+        # and a headset setting, and assigning here threw away the reason the
+        # equaliser half was refused a moment earlier.
+        self.refused.update(problems)
         self.publish()
 
     def handle(self, text: str) -> None:
+        # A message is about the action that produced it and must not outlive it.
+        # Left to persist, one failed write puts a line on the panel that stays
+        # there through every unrelated thing the user does next.
+        stale = bool(self.error or self.refused)
+        self.error = ""
+        self.refused = {}
         try:
             command = parse_command(text)
         except HeadsetError as error:
@@ -329,6 +487,10 @@ class Owner:
         if command.get("refresh"):
             if self.device is not None:
                 self.device.read()
+            # Clearing a message is itself a change the panel has to be told
+            # about, or it keeps showing one this command has already retracted.
+            if stale:
+                self.publish()
             return
         if command.get("toggle"):
             feature = command["toggle"]
@@ -434,6 +596,8 @@ class Owner:
                 if not self.running:
                     break
 
+            self.tend_equaliser()
+
             if self.device is not None:
                 try:
                     self.poll_records()
@@ -455,6 +619,7 @@ class Owner:
 
         if self.device is not None:
             self.device.close()
+        self.equaliser.stop()
         for client in self.clients:
             client.close()
         if self.listener is not None:

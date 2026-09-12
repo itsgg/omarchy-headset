@@ -13,6 +13,8 @@ Column {
 
   property var spec: ({})
   property var status: ({})
+  // Why this row cannot be changed, or why the last attempt was refused.
+  property string reason: ""
   property var reading: ({})
   property QtObject theme: null
   property QtObject bar: null
@@ -23,30 +25,38 @@ Column {
   signal hovered(bool on)
 
   spacing: Style.space(6)
-  enabled: !!status.writable
+  enabled: !!status.writable && status.available !== false
 
   // Dim the control, never the words. WCAG 1.4.3 withdraws the contrast floor
   // from an inactive component, so a blanket opacity lands hardest on the one
   // piece of text the user most needs to read: the reason it is inactive.
 
-  // Six sliders: clear bass first, then the five bands, which is the order the
-  // headset itself reports them in.
-  readonly property var columns: [
-    { id: "clear", label: "Bass", feature: "eq_clear_bass" },
-    { id: "b0", label: Model.BAND_FREQUENCIES[0], feature: "eq_bands", band: 0 },
-    { id: "b1", label: Model.BAND_FREQUENCIES[1], feature: "eq_bands", band: 1 },
-    { id: "b2", label: Model.BAND_FREQUENCIES[2], feature: "eq_bands", band: 2 },
-    { id: "b3", label: Model.BAND_FREQUENCIES[3], feature: "eq_bands", band: 3 },
-    { id: "b4", label: Model.BAND_FREQUENCIES[4], feature: "eq_bands", band: 4 }
-  ]
+  // The bands come from the row, because there are two equalisers here with
+  // different band counts, and this component should not have to know which one
+  // it is drawing. One carries a clear bass alongside its bands; the other does
+  // not, and says so by leaving it out.
+  readonly property var bandSpec: root.spec.bands || ({})
+  readonly property var bandLabels: bandSpec.labels || []
+  readonly property real bandStep: bandSpec.step || 1
+
+  readonly property var columns: {
+    var out = []
+    if (bandSpec.extra) {
+      out.push({ label: bandSpec.extra.label, feature: bandSpec.extra.feature, band: -1 })
+    }
+    for (var i = 0; i < root.bandLabels.length; i++) {
+      out.push({ label: root.bandLabels[i], feature: bandSpec.feature, band: i })
+    }
+    return out
+  }
 
   function gainAt(index) {
     var column = root.columns[index]
-    if (column.feature === "eq_clear_bass") {
-      var bass = root.reading.eq_clear_bass
-      return bass === undefined || bass === null ? 0 : Number(bass)
+    if (column.band < 0) {
+      var single = root.reading[column.feature]
+      return single === undefined || single === null ? 0 : Number(single)
     }
-    var bands = root.reading.eq_bands
+    var bands = root.reading[column.feature]
     if (!bands || bands.length <= column.band) return 0
     var value = bands[column.band]
     return value === undefined || value === null ? 0 : Number(value)
@@ -55,12 +65,17 @@ Column {
   function write(index, gain) {
     if (!root.enabled) return
     var column = root.columns[index]
-    var clamped = Math.max(Model.BAND_MIN, Math.min(Model.BAND_MAX, Math.round(gain)))
-    if (column.feature === "eq_clear_bass") {
-      root.requested({ eq_clear_bass: clamped })
-      return
+    var quantum = root.bandStep
+    var clamped = Math.max(Model.BAND_MIN,
+      Math.min(Model.BAND_MAX, Math.round(gain / quantum) * quantum))
+    var values = {}
+    if (column.band < 0) {
+      values[column.feature] = clamped
+    } else {
+      values[column.feature] = Model.bandsWith(root.reading, column.feature, column.band,
+                                               root.bandLabels.length, clamped, quantum)
     }
-    root.requested({ eq_bands: Model.bandsWith(root.reading, column.band, clamped) })
+    root.requested(values)
   }
 
   // Left and right walk the bands. Changing a gain is plus and minus, so an arrow
@@ -71,11 +86,17 @@ Column {
   }
 
   function nudge(direction) {
-    root.write(root.bandIndex, root.gainAt(root.bandIndex) + direction)
+    root.write(root.bandIndex, root.gainAt(root.bandIndex) + direction * root.bandStep)
   }
 
   function activate() {
-    root.requested({ eq_bands: [0, 0, 0, 0, 0], eq_clear_bass: 0 })
+    if (!root.enabled) return
+    var flat = []
+    for (var i = 0; i < root.bandLabels.length; i++) flat.push(0)
+    var values = {}
+    values[bandSpec.feature] = flat
+    if (bandSpec.extra) values[bandSpec.extra.feature] = 0
+    root.requested(values)
   }
 
   Item {
@@ -217,7 +238,8 @@ Column {
               onReleased: function(mouse) { root.write(band.index, gainAt(mouse.y)) }
               onWheel: function(wheel) {
                 root.bandIndex = band.index
-                root.write(band.index, band.gain + (wheel.angleDelta.y > 0 ? 1 : -1))
+                root.write(band.index,
+                  band.gain + (wheel.angleDelta.y > 0 ? root.bandStep : -root.bandStep))
               }
             }
           }
@@ -240,14 +262,9 @@ Column {
     }
   }
 
-  Text {
-    width: parent.width
-    text: root.spec.hint || ""
-    textFormat: Text.PlainText
-    color: root.theme ? root.theme.faint : "#666"
-    font.family: root.theme ? root.theme.fontFamily : Style.font.family
-    font.pixelSize: Style.font.caption
-    wrapMode: Text.WordWrap
-    leftPadding: Style.space(4)
+  ReasonLine {
+    theme: root.theme
+    reason: root.reason
+    hint: root.spec.hint || ""
   }
 }

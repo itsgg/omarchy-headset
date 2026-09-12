@@ -9,6 +9,8 @@
 // exports; the tests evaluate this file in a fresh context.
 
 var BAND_FREQUENCIES = ["400", "1k", "2.5k", "6.3k", "16k"];
+// The equaliser this machine runs, for headsets whose own hardware has none.
+var HOST_FREQUENCIES = ["32", "64", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
 var BAND_MIN = -10;
 var BAND_MAX = 10;
 var AMBIENT_MAX = 20;
@@ -63,12 +65,11 @@ var SECTIONS = [
       {
         id: "ambient_level", kind: "slider", label: "Ambient sound",
         minimum: 0, maximum: AMBIENT_MAX, step: 1, ticks: 0,
-        hint: "How much of the room around you comes through.",
-        unavailableHint: "Only applies in ambient mode. The headset discards it otherwise."
+        unavailableHint: "The headset only applies this in ambient mode"
       },
       {
         id: "focus_on_voice", kind: "toggle", label: "Focus on voice",
-        description: "Keeps voices and drops the rest of the room",
+        description: "Keeps voices, drops the rest of the room",
         unavailableHint: "Only applies in ambient mode"
       }
     ]
@@ -80,7 +81,11 @@ var SECTIONS = [
       { id: "eq_preset", kind: "choice", label: "Preset", options: PRESET_OPTIONS },
       {
         id: "eq", kind: "equalizer", label: "Bands", feature: "eq_bands",
-        hint: "Five bands and clear bass, in decibels. Moving one selects Manual."
+        bands: {
+          feature: "eq_bands", labels: BAND_FREQUENCIES, step: 1,
+          extra: { feature: "eq_clear_bass", label: "Bass" }
+        },
+        hint: "Moving a band selects Manual"
       }
     ]
   },
@@ -90,7 +95,7 @@ var SECTIONS = [
     rows: [
       {
         id: "speak_to_chat", kind: "toggle", label: "Speak-to-chat",
-        description: "Pauses playback and lets the room in when you talk"
+        description: "Pauses the music when you start talking"
       },
       {
         id: "speak_to_chat_sensitivity", kind: "segmented", label: "Sensitivity",
@@ -104,15 +109,35 @@ var SECTIONS = [
       },
       {
         id: "pause_on_removal", kind: "toggle", label: "Pause when taken off",
-        description: "Stops playback when the headset leaves your head"
+        description: "Stops the music when you take it off"
       },
       {
         id: "voice_guidance", kind: "toggle", label: "Voice guidance",
-        description: "The spoken announcements from the headset itself"
+        description: "The headset's own spoken announcements"
       },
       {
         id: "dsee", kind: "toggle", label: "DSEE Extreme",
         description: "Sony's upscaling of compressed audio"
+      }
+    ]
+  },
+  {
+    id: "host_equaliser",
+    title: "EQUALISER",
+    rows: [
+      {
+        id: "eq_enabled", kind: "toggle", label: "Equaliser",
+        description: "Shapes the sound of anything played here"
+      },
+      {
+        id: "eq_preset_host", kind: "choice", label: "Preset",
+        optionsFrom: "eq_presets", optionsIn: "equaliser",
+        unavailableHint: "Switch the equaliser on to change it"
+      },
+      {
+        id: "eq_gains", kind: "equalizer", label: "Bands", feature: "eq_gains",
+        bands: { feature: "eq_gains", labels: HOST_FREQUENCIES, step: 0.5 },
+        unavailableHint: "Switch the equaliser on to change it"
       }
     ]
   },
@@ -122,15 +147,14 @@ var SECTIONS = [
     rows: [
       {
         id: "codec", kind: "choice", label: "Codec", optionsFrom: "codecs",
-        hint: "What is carrying the audio now. Changing it reconnects the headset."
+        hint: "Changing this reconnects the headset"
       },
       {
-        id: "audio_mode", kind: "segmented", label: "Mode", options: MODE_OPTIONS,
-        hint: "Bluetooth cannot do both at once: a microphone costs the codec."
+        id: "audio_mode", kind: "segmented", label: "Mode", options: MODE_OPTIONS
       },
       {
         id: "microphone", kind: "toggle", label: "Microphone",
-        description: "Muted for every application on this machine",
+        description: "Muted for every app on this machine",
         unavailableHint: "Switch to Calls to use the microphone"
       }
     ]
@@ -171,14 +195,44 @@ function rowState(row, payload) {
   var state = (payload && payload.state) || {};
   var pending = (payload && payload.pending) || [];
   var ignored = (payload && payload.ignored) || [];
+  var refused = (payload && payload.refused) || {};
   return {
     supported: !!info.supported,
     writable: !!info.writable,
     available: info.available !== false,
     pending: pending.indexOf(id) !== -1,
     ignored: ignored.indexOf(id) !== -1,
+    // Why this one setting was refused. A single line at the foot of the panel
+    // cannot say which of nine settings it is about, and it stays there through
+    // everything the user does next.
+    refused: String(refused[id] || ""),
     value: state[id]
   };
+}
+
+// The words under a row: why it cannot be changed, or what it does. A refusal
+// comes first because the user has just tried it, then the standing reason the
+// row is inactive, and only then the description.
+// Shown text starts with a capital. The strings come from two places, the panel
+// and the helper, and the helper's double as journal lines, so the case is
+// settled here where they are displayed rather than argued about at each source.
+function sentence(text) {
+  var value = String(text || "");
+  if (value === "") return "";
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function rowReason(row, status) {
+  if (status.refused) return sentence(status.refused);
+  // A readout is not a control and never accepts changes, so saying it does not
+  // would put that line under the firmware version of every headset.
+  if (row.kind === "readout") return "";
+  if (status.ignored) return "This headset accepts this and does not act on it";
+  if (status.supported && !status.writable) {
+    return "This headset reports this and does not accept changes";
+  }
+  if (status.available === false && row.unavailableHint) return sentence(row.unavailableHint);
+  return "";
 }
 
 function rowVisible(row, payload) {
@@ -206,7 +260,8 @@ function visibleSections(payload) {
 function optionsFor(row, payload) {
   if (row.id === "eq_preset") return presetOptions(payload);
   if (!row.optionsFrom) return row.options || [];
-  var source = (payload && payload.audio) || {};
+  // Not always the audio reading: the equaliser brings its own list of presets.
+  var source = (payload && payload[row.optionsIn || "audio"]) || {};
   var list = source[row.optionsFrom];
   return Array.isArray(list) ? list : [];
 }
@@ -385,8 +440,17 @@ function setCommand(values) {
   return JSON.stringify({ set: values });
 }
 
-function bandsWith(state, index, value) {
-  var bands = (state && state.eq_bands) ? state.eq_bands.slice() : [0, 0, 0, 0, 0];
-  bands[index] = clamp(Math.round(value), BAND_MIN, BAND_MAX);
+// One band changed, every band restated. Which list it is comes from the row,
+// because there are two equalisers with different band counts and the panel
+// should not have to know which one it is drawing.
+function bandsWith(state, feature, index, count, value, step) {
+  var current = (state && state[feature]) ? state[feature].slice() : [];
+  var bands = [];
+  for (var i = 0; i < count; i++) {
+    var at = current.length > i ? Number(current[i]) : 0;
+    bands.push(isFinite(at) ? at : 0);
+  }
+  var quantum = step || 1;
+  bands[index] = clamp(Math.round(value / quantum) * quantum, BAND_MIN, BAND_MAX);
   return bands;
 }

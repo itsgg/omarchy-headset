@@ -10,6 +10,8 @@ Column {
 
   property var spec: ({})
   property var status: ({})
+  // Why this row cannot be changed, or why the last attempt was refused.
+  property string reason: ""
   property var options: []
   property QtObject theme: null
   property QtObject bar: null
@@ -73,5 +75,12 @@ Column {
       ? "" : String(root.status.value)
     onChanged: function(value) { root.choose(value) }
     onHovered: function(on) { root.hovered(on) }
+  }
+
+  // These two had no line of their own, so a refusal on them had nowhere to go.
+  ReasonLine {
+    theme: root.theme
+    reason: root.reason
+    hint: root.spec.hint || ""
   }
 }

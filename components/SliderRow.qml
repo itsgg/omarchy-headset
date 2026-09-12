@@ -8,6 +8,8 @@ Column {
 
   property var spec: ({})
   property var status: ({})
+  // Why this row cannot be changed, or why the last attempt was refused.
+  property string reason: ""
   property QtObject theme: null
   property QtObject bar: null
   property bool hasCursor: false
@@ -79,18 +81,8 @@ Column {
     }
   }
 
-  Text {
-    visible: !!root.spec.hint || !!root.spec.unavailableHint
-    width: parent.width
-    text: root.status.available === false && root.spec.unavailableHint
-      ? root.spec.unavailableHint : (root.spec.hint || "")
-    textFormat: Text.PlainText
-    color: root.status.available === false && root.spec.unavailableHint
-      ? (root.theme ? root.theme.dim : "#888")
-      : (root.theme ? root.theme.faint : "#666")
-    font.family: root.theme ? root.theme.fontFamily : Style.font.family
-    font.pixelSize: Style.font.caption
-    wrapMode: Text.WordWrap
-    leftPadding: Style.space(4)
-  }
+  ReasonLine {
+    theme: root.theme
+    reason: root.reason
+    hint: root.spec.hint || ""}
 }
