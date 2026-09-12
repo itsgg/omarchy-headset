@@ -179,6 +179,19 @@ def wait_for_profile(address: str, profile: str) -> dict:
     return latest
 
 
+# What PipeWire calls a thing you wear. A speaker has a card too, and a keyboard
+# has none at all.
+HEADSET_FORM_FACTORS = ("headset", "headphone")
+
+
+def headset_cards(text: str | None = None) -> list[dict]:
+    """Connected Bluetooth cards that are headsets, not speakers or anything else."""
+    if text is None:
+        text = run_pactl(["list", "cards"])
+    return [card for card in parse_cards(text)
+            if card["address"] and card["form_factor"] in HEADSET_FORM_FACTORS]
+
+
 def any_connected_audio_device() -> str:
     """The first connected device that has an audio card, driver or no driver.
 
@@ -186,10 +199,9 @@ def any_connected_audio_device() -> str:
     tier exists for headsets nothing claims, and resolving through a driver list
     refused the very devices it is for.
     """
-    for card in parse_cards(run_pactl(["list", "cards"])):
-        if card["address"]:
-            return card["address"]
-    raise HeadsetError("no connected Bluetooth audio device")
+    for card in headset_cards():
+        return card["address"]
+    raise HeadsetError("no connected Bluetooth headset")
 
 
 def cmd_audio(args) -> int:

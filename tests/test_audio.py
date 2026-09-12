@@ -117,6 +117,17 @@ class DiscoveryTests(unittest.TestCase):
         with patch.object(audio, "run_pactl", return_value=CARDS):
             self.assertEqual(audio.any_connected_audio_device(), NOTHING)
 
+    def test_a_speaker_or_a_keyboard_is_not_a_headset(self):
+        # Every device now resolves to a driver, because the fallback is found by
+        # an advertised service rather than a name. What makes something a headset
+        # is that its card says it is worn.
+        speaker = CARDS.replace('device.form_factor = "headset"',
+                                'device.form_factor = "speaker"', 1)
+        found = [c["address"] for c in audio.headset_cards(speaker)]
+        self.assertNotIn(NOTHING, found)
+        self.assertIn(SONY, found)
+        self.assertEqual(len(audio.headset_cards(CARDS)), 2)
+
     def test_no_bluetooth_audio_at_all_is_an_error(self):
         with patch.object(audio, "run_pactl", return_value="Card #0\n\tName: alsa_card.x\n"):
             with self.assertRaises(HeadsetError):

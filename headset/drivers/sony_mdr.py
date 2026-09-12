@@ -404,6 +404,7 @@ DRIVER = Driver(
     records=RECORDS,
     controls=CONTROLS,
     protocols=PROTOCOLS,
+    battery_zero_is_noise=True,
     claims=claims,
     identify=identify,
 )

@@ -179,3 +179,68 @@ python3 tools/verify.py <address> [control ...]
 omarchy-shell io.github.itsgg.headset status
 journalctl --user -u '*' | grep omarchy-headset
 ```
+
+# Google Fast Pair Message Stream
+
+The one cross-vendor channel. A WH-1000XM5 and a Nothing Ear (open) both
+advertise it, which is the strongest available evidence that it is real rather
+than a Google-only path.
+
+| | |
+| --- | --- |
+| Service UUID | `df21fe2c-2515-4fdb-8886-f12c4d67927c` |
+| Channel on a Nothing Ear (open) | 17, found by the same SDP query as everything else |
+| Framing | `<group:1> <code:1> <length:2 big-endian> <data>` |
+| Acknowledgement | none, no sequence number, no checksum |
+| Authentication | none. The HMAC and nonce were removed from the specification in April 2024 |
+
+The device volunteers what it knows as soon as the channel opens and answers
+nothing on demand, so support is established by listening rather than by asking.
+Captured from a Nothing Ear (open) within a second of connecting:
+
+```
+03 01 0003 fc 3a af      device information, model id
+03 02 0006 78 72 ...     device information, BLE address
+03 03 0003 64 64 7f      device information, battery: left 100%, right 100%, no case reading
+```
+
+Battery is one byte per part: bit seven is charging, the low seven bits are a
+percentage, `0x7f` means unknown and `0xff` in the case slot means there is no
+case. Google's own worked example, `0303000357417f`, decodes to left 87%, right
+65%, case unknown, and this implementation reproduces it byte for byte.
+
+## Noise control, group 0x08
+
+| Code | Direction | Meaning |
+| --- | --- | --- |
+| `0x11` | to the headset | ask for the noise state |
+| `0x12` | to the headset | set it |
+| `0x13` | from the headset | announce it |
+
+Four bytes: a version, the modes the headset **has**, the modes it will let you
+**set**, and the one it is **in**. The second and third bytes are the reason this
+is worth implementing generically: the headset describes its own capabilities, so
+no table of models is needed to know what to offer.
+
+Google numbers the bits from the most significant, so bit 0 is `0x80`:
+
+```
+0x80 transparent   0x40 adaptive   0x20 off   0x10 reserved   0x08 ANC
+```
+
+Reading them the other way round is the obvious mistake and would offer modes the
+headset does not have.
+
+A Nothing Ear (open) does not answer group `0x08` at all, which is consistent
+with it being an open-ear model with no active noise cancellation to control. The
+capability probe therefore does not offer a noise row for it, which is the
+behaviour wanted: the headset decides, not a table here.
+
+**Reading this is implemented; setting it is not.** The specification's Set
+request is a seeker version byte followed by the control data, and it does not
+say what the capability bytes should carry on the way in. No headset here has
+noise cancelling to try it against: the Nothing Ear has none, and the Sony has a
+driver of its own that already does it properly. Writing a frame of that shape
+and hoping is how an untested guess ends up on somebody else's hardware. Enabling
+it needs one headset with noise cancelling and no vendor driver, plus a run of
+`tools/verify.py`.

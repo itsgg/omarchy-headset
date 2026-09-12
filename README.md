@@ -18,15 +18,24 @@ nothing in PipeWire's Bluetooth plugin relates to either, and the single
 "Equalizer" string in `bluetoothd` is an AVRCP player setting pointing the other
 way, at your music player, on or off, no bands.
 
-So the panel is built in two tiers.
+So the panel is built in three tiers, and takes the best one the headset offers.
 
 | | What you get | Where it comes from |
 | --- | --- | --- |
 | **Every headset** | Battery, the codec in use and the choice of codec, music-or-calls mode, microphone | BlueZ and PipeWire, no vendor protocol |
-| **With a driver** | Noise cancelling, ambient sound, equaliser, speak-to-chat, pause on removal, voice guidance, DSEE, power off | The manufacturer's own protocol |
+| **Fast Pair** | Battery per earbud and per case, and noise control where the headset has it | Google's Message Stream, which unrelated manufacturers implement |
+| **Vendor driver** | Ambient sound, equaliser, speak-to-chat, pause on removal, voice guidance, DSEE, power off | The manufacturer's own protocol |
 
-One driver ships, Sony MDR over RFCOMM, and every byte of it was read off a
-WH-1000XM5. A headset with no driver still gets a useful panel rather than
+The middle tier is the interesting one. Google's Fast Pair Message Stream is a
+plain RFCOMM service on a fixed UUID, and a Sony WH-1000XM5 and a Nothing Ear
+(open) both advertise it, which is two unrelated manufacturers speaking one
+protocol. It carries per-earbud battery, which no standard Bluetooth path can
+give, and a noise-control extension whose first bytes are the headset telling
+you which modes it has and which you may set. As far as I can establish this is
+the first open implementation of that extension on Linux.
+
+One vendor driver ships, Sony MDR over RFCOMM, and every byte of it was read off
+a WH-1000XM5. A headset with no driver still gets a useful panel rather than
 nothing, which is the point of the split.
 
 ## Compatibility
@@ -57,7 +66,8 @@ headset answers rather than from a table, so an unverified model shows the rows
 it actually supports and nothing it does not. Reports welcome either way.
 
 A headset with no driver is not a headset with an empty panel. This is a Nothing
-Ear (open), which has no driver here at all:
+Ear (open), which has no vendor driver here at all. The per-earbud battery comes
+from Fast Pair and the rest from PipeWire:
 
 <img src="docs/no-driver.png" alt="A headset with no driver: battery, codec, mode and microphone" width="340">
 

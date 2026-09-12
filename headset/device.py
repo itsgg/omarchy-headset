@@ -36,7 +36,8 @@ class Device:
 
     def open(self, use_cache: bool = True) -> None:
         self.channel = sdp.channel_for(self.address, self.driver.service_uuid, use_cache=use_cache)
-        self.session = Session(
+        factory = self.driver.session or Session
+        self.session = factory(
             address=self.address,
             channel=self.channel,
             on_message=self._absorb,
@@ -68,7 +69,15 @@ class Device:
             self.on_log(text)
 
     def _handshake(self) -> None:
-        """The init exchange decides the protocol generation before anything else."""
+        """The init exchange decides the protocol generation before anything else.
+
+        A protocol with no handshake skips it: the channel being open is the whole
+        of the negotiation, and the device starts talking on its own.
+        """
+        if self.driver.init is None:
+            self.ready = True
+            return
+
         answer: dict = {}
         # Whether it answered at all is a different question from what the driver
         # read out of the answer. A driver with no `identify` returns nothing and
@@ -115,15 +124,24 @@ class Device:
                 # matched is what hid a whole feature behind another one.
                 continue
             self.last_read.update(decoded)
+            if record.volunteered and not self.support.get(record.id):
+                # It just arrived, so it exists. Waiting for the next explicit
+                # read left a feature that had announced itself unsupported.
+                self.support[record.id] = True
+                for feature in record.provides:
+                    self.support[feature] = True
             self._apply(decoded)
             return
 
     def _apply(self, values: dict) -> None:
         changed = {}
         for key, value in values.items():
-            # A battery reading of zero arrives spuriously just after a multipoint
-            # attach and corrects on the next read, so the last good value stands.
-            if key == "battery" and value == 0 and self.state.get("battery"):
+            # A battery reading of zero arrives spuriously from some protocols
+            # just after a multipoint attach and corrects on the next read, so the
+            # last good value stands. Only where the driver says so: on a protocol
+            # that reports a real zero, holding the old number is the lie.
+            if (key == "battery" and value == 0 and self.state.get("battery")
+                    and self.driver.battery_zero_is_noise):
                 continue
             if self.state.get(key) != value:
                 self.state[key] = value
@@ -140,6 +158,9 @@ class Device:
         outcomes: dict[str, str] = {}
 
         for record in records:
+            if record.volunteered:
+                continue
+
             def done(status: str, payload: bytes | None, record=record) -> None:
                 outcomes[record.id] = status
 
@@ -148,6 +169,13 @@ class Device:
         self.session.run_until_idle(timeout=timeout)
 
         for record in records:
+            if record.volunteered:
+                # Nothing was asked, so support is whatever turned up.
+                present = any(feature in self.last_read for feature in record.provides)
+                self.support[record.id] = present
+                for feature in record.provides:
+                    self.support[feature] = present
+                continue
             status = outcomes.get(record.id, FAILED)
             present = status == REPLIED
             self.support[record.id] = present

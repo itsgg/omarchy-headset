@@ -171,6 +171,24 @@ test("the mode cycle wraps both ways", () => {
   assert.equal(M.nextNoiseMode("nonsense", 1), "ambient");
 });
 
+test("earbuds report each bud rather than one number for both", () => {
+  // One number for two buds that discharge differently is wrong about at least
+  // one of them, and it is the lower one that decides when the music stops.
+  const buds = {
+    state: {
+      battery: 88,
+      battery_parts: { left: { level: 95, charging: false }, right: { level: 88, charging: false } },
+    },
+  };
+  assert.equal(M.batteryText(buds), "L 95%  R 88%");
+  assert.equal(M.barText(buds), "88%");
+  const withCase = structuredClone(buds);
+  withCase.state.battery_parts.case = { level: 40, charging: true };
+  assert.ok(M.batteryText(withCase).includes("case 40%"));
+  // A headset that reports one battery keeps saying so.
+  assert.equal(M.batteryText({ state: { battery: 34 } }), "34%");
+});
+
 test("the bar falls back to bluez's battery when there is no session", () => {
   assert.equal(M.barText(xm5), "34%");
   assert.equal(M.barText({ state: {}, bluezBattery: 40 }), "40%");

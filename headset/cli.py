@@ -33,12 +33,22 @@ def connected_devices() -> list[dict]:
                                  capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError) as error:
         raise HeadsetError(f"could not ask bluez which devices are connected: {error}") from error
+    # A driver is now found for anything, because the fallback is identified by a
+    # service rather than a name. So what makes something a headset is that it is
+    # one: it has an audio card and that card says it is worn. Without this a
+    # connected keyboard was listed as a headset.
+    try:
+        wearable = {card["address"].upper() for card in audio.headset_cards()}
+    except HeadsetError:
+        wearable = set()
     found = []
     for line in listing.stdout.splitlines():
         match = re.match(r"Device\s+((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+(.*)", line.strip())
         if not match:
             continue
         address, name = match.group(1), match.group(2).strip()
+        if address.upper() not in wearable:
+            continue
         driver = drivers.for_device(name, address)
         if driver is not None:
             found.append({"address": address, "name": name, "driver": driver.id})

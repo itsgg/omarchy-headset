@@ -18,7 +18,9 @@ COMMAND_2 = 0x0E
 @dataclass(frozen=True)
 class Record:
     id: str
-    request: bytes
+    # None for a record the device volunteers rather than answers. Its support is
+    # established by one arriving, not by asking and being answered.
+    request: bytes | None
     decode: Callable[[bytes], dict | None]
     provides: tuple[str, ...]
     message_type: int = COMMAND_1
@@ -26,6 +28,12 @@ class Record:
     poll_seconds: float = 0.0
     # A record the device may not have; absence is normal, not an error.
     optional: bool = True
+    # For volunteered records, which inbound messages belong to this one.
+    match: Callable[[object], bool] | None = None
+
+    @property
+    def volunteered(self) -> bool:
+        return self.request is None
 
     @property
     def reply(self) -> int:
@@ -38,6 +46,8 @@ class Record:
         return (self.request[0] + 3) & 0xFF
 
     def matches(self, message) -> bool:
+        if self.request is None:
+            return self.match(message) if self.match else False
         """Whether an inbound message is this record's answer or announcement.
 
         The payload type alone is not enough to tell records apart. Speak-to-chat
@@ -74,13 +84,25 @@ class Driver:
     id: str
     name: str
     service_uuid: str
-    init: bytes
+    # None for a protocol with no handshake, where the device simply starts
+    # talking once the channel is open.
+    init: bytes | None
     records: tuple[Record, ...]
     controls: tuple[Control, ...] = ()
     # Protocol generations this driver's records are written for. A headset that
     # answers the handshake with a different one is refused outright rather than
     # left with a panel that is empty for no stated reason.
     protocols: tuple[str, ...] = ()
+    # How to open a session for this protocol. Sony's needs acknowledgement and
+    # sequence discipline; Fast Pair's is a plain stream of frames.
+    session: Callable | None = None
+    # Tried when no driver claims the device by name, and proves itself by
+    # opening. A protocol identified by an advertised service rather than a model
+    # name cannot be recognised from the name at all.
+    fallback: bool = False
+    # True where a reading of zero has been seen to arrive spuriously and correct
+    # itself, so the last good value is kept instead.
+    battery_zero_is_noise: bool = False
     claims: Callable[[str], bool] = field(default=lambda name: False)
     # Records to read once the init handshake is answered, in order.
     identify: Callable[[bytes], dict] | None = None

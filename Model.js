@@ -254,8 +254,27 @@ function batteryGlyph(level, charging) {
   return "󰂃";
 }
 
+// Earbuds discharge at different rates, so one number for two of them is a
+// number that is wrong about at least one. Where the headset reports each part
+// separately, say each part.
 function batteryText(payload) {
   var state = (payload && payload.state) || {};
+  var parts = state.battery_parts;
+  if (parts) {
+    var pieces = [];
+    if (parts.left) pieces.push("L " + parts.left.level + "%");
+    if (parts.right) pieces.push("R " + parts.right.level + "%");
+    // The case charges too, and saying so is the difference between "put them
+    // away" and "the case is flat as well".
+    if (parts["case"]) {
+      pieces.push("case " + parts["case"].level + "%"
+        + (parts["case"].charging ? " charging" : ""));
+    }
+    if (pieces.length > 0) {
+      var worn = (parts.left && parts.left.charging) || (parts.right && parts.right.charging);
+      return pieces.join("  ") + (worn ? " charging" : "");
+    }
+  }
   var level = state.battery;
   if (level === undefined || level === null) {
     var fallback = payload && payload.bluezBattery;
@@ -287,72 +306,8 @@ function deviceName(payload) {
 function heroMeta(payload) {
   var parts = [];
   var battery = batteryText(payload);
-  if (battery) parts.push("Battery " + battery);
-  var sound = (payload && payload.audio) || {};
-  if (sound.active_codec) parts.push(sound.active_codec);
-  if (parts.length > 0) return parts.join("  ·  ");
-  // Nothing to say yet. Only then is the reason worth the line.
-  if (payload && payload.error) return payload.error;
-  return payload && payload.present ? "Connected" : "Not connected";
-}
-
-// While a driver is opening its session there is nothing in `controls` yet, and
-// every vendor row is hidden for exactly the same reason an unsupported headset
-// hides them. Three words are enough to tell the two apart.
-function probeNotice(payload) {
-  if (!payload || !payload.present) return "";
-  if (payload.connected || payload.unsupported) return "";
-  return "Asking the headset\u2026";
-}
-
-// The keys this particular panel has. Advertising "a noise" to a headset with no
-// noise control is a promise the panel cannot keep.
-function keyboardHint(payload) {
-  var controls = (payload && payload.controls) || {};
-  var parts = [];
-  if (controls.noise && controls.noise.writable) parts.push("a noise");
-  if (controls.noise && controls.noise.writable) parts.push("t ambient");
-  parts.push("j k rows");
-  parts.push("h l adjust");
-  parts.push("+ − value");
-  parts.push("Esc close");
-  return parts.join(" · ");
-}
-
-function batteryText(payload) {
-  var state = (payload && payload.state) || {};
-  var level = state.battery;
-  if (level === undefined || level === null) {
-    var fallback = payload && payload.bluezBattery;
-    if (fallback === undefined || fallback === null || fallback < 0) return "";
-    level = fallback;
-  }
-  return level + "%" + (state.charging ? " charging" : "");
-}
-
-function noiseSummary(payload) {
-  var state = (payload && payload.state) || {};
-  if (state.noise === "anc") return "Noise cancelling";
-  if (state.noise === "ambient") {
-    var level = state.ambient_level;
-    var suffix = (level === undefined || level === null) ? "" : " " + level + "/" + AMBIENT_MAX;
-    return "Ambient sound" + suffix;
-  }
-  if (state.noise === "wind") return "Wind noise reduction";
-  if (state.noise === "off") return "Noise control off";
-  return "";
-}
-
-function deviceName(payload) {
-  var device = (payload && payload.device) || {};
-  var name = String(device.name || "").trim();
-  return name === "" ? "Headset" : name;
-}
-
-function heroMeta(payload) {
-  var parts = [];
-  var battery = batteryText(payload);
-  if (battery) parts.push("Battery " + battery);
+  if (battery) parts.push(((payload && payload.state && payload.state.battery_parts)
+    ? "" : "Battery ") + battery);
   var sound = (payload && payload.audio) || {};
   if (sound.active_codec) parts.push(sound.active_codec);
   if (parts.length > 0) return parts.join("  ·  ");
