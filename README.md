@@ -8,7 +8,7 @@ as well, spoken in that manufacturer's own protocol.
 
 No vendor app, no daemon to install, no root, no udev rule.
 
-<img src="docs/hero.png" alt="The panel: a ten-band equaliser, the codec in use, and the music-or-calls mode" width="380">
+<img src="docs/panel.png" alt="The panel on a WH-1000XM5: noise control, the headset's own equaliser and its behaviour settings" width="380">
 
 ## Three tiers, and why
 
@@ -164,6 +164,8 @@ output on a WH-1000XM5 on firmware 2.5.1.
 The touch panel is therefore shown read-only rather than as a switch that lies,
 and nothing that never answered appears at all. On another model the panel will
 differ, because the helper asks the headset rather than a table.
+
+<img src="docs/behaviour.png" alt="Behaviour settings and the headset's own readouts" width="380">
 
 ## Settings
 
