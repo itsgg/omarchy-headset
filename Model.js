@@ -64,13 +64,10 @@ var SECTIONS = [
       { id: "noise", kind: "segmented", label: "Mode", options: NOISE_OPTIONS },
       {
         id: "ambient_level", kind: "slider", label: "Ambient sound",
-        minimum: 0, maximum: AMBIENT_MAX, step: 1, ticks: 0,
-        unavailableHint: "The headset only applies this in ambient mode"
+        minimum: 0, maximum: AMBIENT_MAX, step: 1, ticks: 0
       },
       {
-        id: "focus_on_voice", kind: "toggle", label: "Focus on voice",
-        description: "Keeps voices, drops the rest of the room",
-        unavailableHint: "Only applies in ambient mode"
+        id: "focus_on_voice", kind: "toggle", label: "Focus on voice"
       }
     ]
   },
@@ -84,8 +81,7 @@ var SECTIONS = [
         bands: {
           feature: "eq_bands", labels: BAND_FREQUENCIES, step: 1,
           extra: { feature: "eq_clear_bass", label: "Bass" }
-        },
-        hint: "Moving a band selects Manual"
+        }
       }
     ]
   },
@@ -94,30 +90,24 @@ var SECTIONS = [
     title: "BEHAVIOUR",
     rows: [
       {
-        id: "speak_to_chat", kind: "toggle", label: "Speak-to-chat",
-        description: "Pauses the music when you start talking"
+        id: "speak_to_chat", kind: "toggle", label: "Speak-to-chat"
       },
       {
         id: "speak_to_chat_sensitivity", kind: "segmented", label: "Sensitivity",
         options: SENSITIVITY_OPTIONS,
-        unavailableHint: "Switch speak-to-chat on to change this"
       },
       {
         id: "speak_to_chat_timeout", kind: "segmented", label: "Resumes after",
         options: TIMEOUT_OPTIONS,
-        unavailableHint: "Switch speak-to-chat on to change this"
       },
       {
-        id: "pause_on_removal", kind: "toggle", label: "Pause when taken off",
-        description: "Stops the music when you take it off"
+        id: "pause_on_removal", kind: "toggle", label: "Pause when taken off"
       },
       {
-        id: "voice_guidance", kind: "toggle", label: "Voice guidance",
-        description: "The headset's own spoken announcements"
+        id: "voice_guidance", kind: "toggle", label: "Voice guidance"
       },
       {
-        id: "dsee", kind: "toggle", label: "DSEE Extreme",
-        description: "Sony's upscaling of compressed audio"
+        id: "dsee", kind: "toggle", label: "DSEE Extreme"
       }
     ]
   },
@@ -126,18 +116,15 @@ var SECTIONS = [
     title: "EQUALISER",
     rows: [
       {
-        id: "eq_enabled", kind: "toggle", label: "Equaliser",
-        description: "Shapes the sound of anything played here"
+        id: "eq_enabled", kind: "toggle", label: "Equaliser"
       },
       {
         id: "eq_preset_host", kind: "choice", label: "Preset",
-        optionsFrom: "eq_presets", optionsIn: "equaliser",
-        unavailableHint: "Switch the equaliser on to change it"
+        optionsFrom: "eq_presets", optionsIn: "equaliser"
       },
       {
         id: "eq_gains", kind: "equalizer", label: "Bands", feature: "eq_gains",
-        bands: { feature: "eq_gains", labels: HOST_FREQUENCIES, step: 0.5 },
-        unavailableHint: "Switch the equaliser on to change it"
+        bands: { feature: "eq_gains", labels: HOST_FREQUENCIES, step: 0.5 }
       }
     ]
   },
@@ -146,16 +133,13 @@ var SECTIONS = [
     title: "AUDIO",
     rows: [
       {
-        id: "codec", kind: "choice", label: "Codec", optionsFrom: "codecs",
-        hint: "Changing this reconnects the headset"
+        id: "codec", kind: "choice", label: "Codec", optionsFrom: "codecs"
       },
       {
         id: "audio_mode", kind: "segmented", label: "Mode", options: MODE_OPTIONS
       },
       {
-        id: "microphone", kind: "toggle", label: "Microphone",
-        description: "Muted for every app on this machine",
-        unavailableHint: "Switch to Calls to use the microphone"
+        id: "microphone", kind: "toggle", label: "Microphone"
       }
     ]
   },
@@ -222,18 +206,21 @@ function sentence(text) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+// The words under a row, and there are almost none.
+//
+// Omarchy's own panels carry a short live status here and nothing else: a wifi
+// row says "Connecting…", a bluetooth row says "85%", and both are empty most
+// of the time. An inactive control is dimmed and never explained, because the
+// thing that dimmed it is on screen. So this returns only the reason the last
+// attempt was refused, which is a status, is about something the user has just
+// done, and is withdrawn by the next thing they do.
 function rowReason(row, status) {
-  if (status.refused) return sentence(status.refused);
-  // A readout is not a control and never accepts changes, so saying it does not
-  // would put that line under the firmware version of every headset.
-  if (row.kind === "readout") return "";
-  if (status.ignored) return "This headset accepts this and does not act on it";
-  if (status.supported && !status.writable) {
-    return "This headset reports this and does not accept changes";
-  }
-  if (status.available === false && row.unavailableHint) return sentence(row.unavailableHint);
-  return "";
+  // Said once per section. Two rows refused for the same reason printed the
+  // same line twice, one under the other, which reads as a stutter.
+  if (row.repeatsReason) return "";
+  return sentence(status.refused);
 }
+
 
 function rowVisible(row, payload) {
   var status = rowState(row, payload);
@@ -242,13 +229,30 @@ function rowVisible(row, payload) {
   return true;
 }
 
+// A copy carrying one extra field. The spec entries are shared between every
+// panel on every monitor, so none of them is ever written to.
+function markedRepeat(row) {
+  var copy = {};
+  for (var key in row) copy[key] = row[key];
+  copy.repeatsReason = true;
+  return copy;
+}
+
 function visibleSections(payload) {
   var out = [];
   for (var i = 0; i < SECTIONS.length; i++) {
     var section = SECTIONS[i];
     var rows = [];
+    var said = {};
     for (var j = 0; j < section.rows.length; j++) {
-      if (rowVisible(section.rows[j], payload)) rows.push(section.rows[j]);
+      var row = section.rows[j];
+      if (!rowVisible(row, payload)) continue;
+      var reason = rowReason(row, rowState(row, payload));
+      if (reason !== "") {
+        if (said[reason]) row = markedRepeat(row);
+        said[reason] = true;
+      }
+      rows.push(row);
     }
     if (rows.length > 0) out.push({ id: section.id, title: section.title, rows: rows });
   }
@@ -356,6 +360,27 @@ function deviceName(payload) {
   var device = (payload && payload.device) || {};
   var name = String(device.name || "").trim();
   return name === "" ? "Headset" : name;
+}
+
+// The answer to `omarchy-shell io.github.itsgg.headset status`.
+//
+// One line, the way Omarchy's own plugins answer it: dropbox and tailscale both
+// return the short string they would show. Anything wanting the whole state has
+// `headsetctl status --pretty`, which is JSON and stays JSON.
+function statusLine(payload) {
+  if (!payload || !payload.present) return "No headset connected";
+  var parts = [];
+  var name = (payload.device && payload.device.name) || "Headset";
+  parts.push(name);
+  var battery = batteryText(payload);
+  if (battery) parts.push(battery);
+  var noise = (payload.state || {}).noise;
+  for (var i = 0; noise && i < NOISE_OPTIONS.length; i++) {
+    if (NOISE_OPTIONS[i].value === noise) { parts.push(NOISE_OPTIONS[i].label); break; }
+  }
+  var codec = (payload.audio || {}).active_codec;
+  if (codec) parts.push(codec);
+  return parts.join("  ·  ");
 }
 
 function heroMeta(payload) {

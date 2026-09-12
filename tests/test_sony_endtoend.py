@@ -17,7 +17,7 @@ from unittest.mock import patch
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from headset import drivers, framing, sdp  # noqa: E402
+from headset import drivers, framing, sdp, session  # noqa: E402
 from headset.device import Device  # noqa: E402
 from headset.drivers import sony_mdr as sony  # noqa: E402
 from headset.server import Owner  # noqa: E402
@@ -123,7 +123,12 @@ def open_headset(silent=()):
     fake = Headset(silent)
     device = Device(address="AC:80:0A:44:B3:93", driver=drivers.by_id("sony-mdr"),
                     name="WH-1000XM5")
+    # The address family is patched as well as the constructor. A Python built
+    # without Bluetooth has no AF_BLUETOOTH at all, which is every GitHub runner,
+    # and this harness is the one test that opens a session.
     with patch.object(sdp, "channel_for", return_value=9), \
+         patch.object(session, "AF_BLUETOOTH", 31), \
+         patch.object(session, "BTPROTO_RFCOMM", 3), \
          patch("socket.socket", return_value=fake), \
          patch("select.select", no_wait):
         device.open()

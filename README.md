@@ -137,7 +137,9 @@ bindd = SUPER, H, Headset, exec, omarchy-shell io.github.itsgg.headset toggle
 ```
 
 `omarchy-shell io.github.itsgg.headset` also takes `open`, `close`, `toggleNoise`,
-`cycleNoise`, `ambient`, `noise <off|ambient|anc>` and `status`.
+`cycleNoise`, `ambient`, `noise <off|ambient|anc>` and `status`, which answers
+with one line the way Omarchy's own plugins do. For the whole state as JSON,
+use `headsetctl status --pretty`.
 
 ## What this headset actually honours
 

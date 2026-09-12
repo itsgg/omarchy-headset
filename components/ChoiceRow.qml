@@ -81,6 +81,5 @@ Column {
   ReasonLine {
     theme: root.theme
     reason: root.reason
-    hint: root.spec.hint || ""
   }
 }

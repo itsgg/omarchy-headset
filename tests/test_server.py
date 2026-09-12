@@ -127,13 +127,16 @@ class ApplyTests(unittest.TestCase):
         own = owner(BASE)
         own.apply({"touch_sensor": False})
         self.assertEqual(own.device.session.sent, [])
-        self.assertIn("does not accept changes", own.refused["touch_sensor"])
+        self.assertIn("Read-only", own.refused["touch_sensor"])
 
     def test_a_control_the_headset_does_not_have_is_refused(self):
         own = owner(BASE, support={"noise": True})
         own.apply({"speak_to_chat": True})
         self.assertEqual(own.device.session.sent, [])
-        self.assertIn("does not have", own.refused["speak_to_chat"])
+        # No row carries a setting the headset does not have, so this one goes
+        # to the panel's single line instead, naming what was asked for.
+        self.assertNotIn("speak_to_chat", own.refused)
+        self.assertIn("speak-to-chat", own.error)
 
     def test_an_ambient_setting_outside_ambient_mode_is_refused(self):
         # The headset discards it, so sending it would be a write into a void.
@@ -383,9 +386,18 @@ class MessageLifetimeTests(unittest.TestCase):
         self.assertEqual(own.error, "")
 
     def test_a_refusal_names_the_setting_it_is_about(self):
+        own = owner(BASE)
+        own.apply({"touch_sensor": False, "ambient_level": 6})
+        self.assertEqual(sorted(own.refused), ["ambient_level", "touch_sensor"])
+
+    def test_a_setting_the_headset_lacks_goes_to_the_panels_one_line(self):
+        # There is no row for it: a setting the headset does not have is not
+        # drawn at all, so a reason on the row would be a reason to nobody. It
+        # can still be asked for from the bar or a keybinding.
         own = owner(BASE, support={"noise": True})
-        own.apply({"speak_to_chat": True, "touch_sensor": False})
-        self.assertEqual(sorted(own.refused), ["speak_to_chat", "touch_sensor"])
+        own.apply({"speak_to_chat": True})
+        self.assertEqual(own.refused, {})
+        self.assertIn("speak-to-chat", own.error)
 
     def test_what_succeeded_is_not_blamed_for_what_did_not(self):
         own = owner(BASE)
@@ -396,13 +408,13 @@ class MessageLifetimeTests(unittest.TestCase):
     def test_one_command_keeps_both_halves_reasons(self):
         # One command can carry an equaliser setting and a headset setting, and
         # the second half used to replace the first half's reason wholesale.
-        own = owner(BASE, support={"noise": True})
+        own = owner(BASE)
         own.host_equaliser = True
         with patch.object(own.equaliser, "available", return_value=True), \
              patch.object(own, "sink_name", return_value="bluez_output.X.1"):
-            own.apply({"eq_gains": "not a list", "speak_to_chat": True})
+            own.apply({"eq_gains": "not a list", "touch_sensor": False})
         self.assertIn("eq_gains", own.refused)
-        self.assertIn("speak_to_chat", own.refused)
+        self.assertIn("touch_sensor", own.refused)
 
     def test_a_missing_filter_chain_is_not_reported_as_the_opposite(self):
         # It used to say the headset had an equaliser of its own, which is the
@@ -418,7 +430,7 @@ class MessageLifetimeTests(unittest.TestCase):
         own = owner(BASE)
         own.host_equaliser = False
         own.apply({"eq_enabled": True})
-        self.assertIn("of its own", own.refused["eq_enabled"])
+        self.assertIn("its own equaliser", own.refused["eq_enabled"])
 
     def test_the_panel_is_told_which_setting_was_refused(self):
         own = owner(BASE)
@@ -439,17 +451,29 @@ class MessageWidthTests(unittest.TestCase):
     LIMIT = 54
 
     def _reasons(self) -> list:
-        own = owner(BASE, support={"noise": True})
-        own.apply({"speak_to_chat": True, "touch_sensor": False, "ambient_level": 6})
+        own = owner(BASE)
+        own.apply({"touch_sensor": False, "ambient_level": 6})
         found = list(own.refused.values())
         own.host_equaliser = False
         own.apply({"eq_enabled": True})
         found += list(own.refused.values())
+        own.host_equaliser = True
+        with patch.object(own.equaliser, "available", return_value=False):
+            own.apply({"eq_enabled": True})
+        found += list(own.refused.values())
+        with patch.object(own.equaliser, "available", return_value=True), \
+             patch.object(own, "sink_name", return_value="bluez_output.X.1"):
+            own.apply({"eq_preset_host": "Nope"})
+        found += list(own.refused.values())
+        # The one that has no row goes to the panel's single line instead.
+        own = owner(BASE, support={"noise": True})
+        own.apply({"speak_to_chat": True})
+        found.append(own.error)
         return found
 
     def test_every_reason_the_helper_writes_fits_on_one_line(self):
         reasons = self._reasons()
-        self.assertGreaterEqual(len(reasons), 4)
+        self.assertGreaterEqual(len(reasons), 5)
         for reason in reasons:
             with self.subTest(reason=reason):
                 self.assertLessEqual(len(reason), self.LIMIT, reason)
@@ -528,3 +552,50 @@ class MessageWidthTests(unittest.TestCase):
         self.assertIn("eq_preset_host", own.refused)
         self.assertNotIn("eq_enabled", own.refused)
         self.assertTrue(own.equaliser.enabled)
+
+    def test_every_key_the_equaliser_owns_is_also_taken_out_of_the_write(self):
+        # The preset was claimed by the equaliser and left in the values passed
+        # on, so it was looked for among the headset's own controls and reported
+        # missing under its internal name: "This headset does not have eq
+        # preset host".
+        own = owner(BASE)
+        own.host_equaliser = True
+        with patch.object(own.equaliser, "available", return_value=True), \
+             patch.object(own.equaliser, "apply"), \
+             patch.object(own, "sink_name", return_value="bluez_output.X.1"):
+            for key, value in (("eq_enabled", True), ("eq_gains", [0] * 10),
+                               ("eq_preset_host", "Flat")):
+                with self.subTest(key=key):
+                    own.apply({key: value})
+                    self.assertEqual(own.error, "", own.error)
+                    self.assertEqual(own.device.session.sent, [])
+
+    def test_the_one_line_is_cleared_by_a_command_that_has_nothing_to_say(self):
+        own = owner(BASE, support={"noise": True})
+        own.apply({"speak_to_chat": True})
+        self.assertTrue(own.error)
+        own.apply({"noise": "anc"})
+        self.assertEqual(own.error, "")
+
+    def test_the_sentence_reads_as_english(self):
+        # "This headset has no an equaliser" is what an article in the name and
+        # an article in the template produced between them.
+        own = owner(BASE, support={"noise": True})
+        own.apply({"eq_bands": [0, 0, 0, 0, 0]})
+        self.assertEqual(own.error, "This headset does not have an equaliser")
+        own.apply({"eq_bands": [0] * 5, "power_off": True})
+        self.assertEqual(own.error,
+                         "This headset does not have an equaliser or a power-off command")
+
+    def test_an_equaliser_only_command_still_clears_the_one_line(self):
+        # `handle` clears it before every command, so this cannot happen through
+        # the socket today. It is here because nothing in `apply` says so, and
+        # the next caller will not know.
+        own = owner(BASE)
+        own.host_equaliser = True
+        own.error = "the headset is not connected"
+        with patch.object(own.equaliser, "available", return_value=True), \
+             patch.object(own.equaliser, "apply"), \
+             patch.object(own, "sink_name", return_value="bluez_output.X.1"):
+            own.apply({"eq_enabled": True})
+        self.assertEqual(own.error, "")

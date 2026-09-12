@@ -544,7 +544,10 @@ Panel {
     function cycleNoise(): void { root.cycleNoise(1) }
     function toggleNoise(): void { root.toggleNoise() }
     function ambient(): void { root.toAmbient() }
-    function status(): string { return JSON.stringify(root.payload) }
+    // A line, not a payload. Omarchy's own plugins answer `status` with the
+    // short string they would show, and `headsetctl status --pretty` is already
+    // the machine-readable one for anything that wants the whole state.
+    function status(): string { return Model.statusLine(root.viewPayload) }
   }
 
   // ------------------------------------------------------------------ bar button

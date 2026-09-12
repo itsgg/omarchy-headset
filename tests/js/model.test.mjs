@@ -91,14 +91,19 @@ test("the rows stay put whether speak-to-chat is on or off", () => {
   assert.deepEqual(rowIds(talking, "behaviour"), rows);
 });
 
-test("a dependent row says why it cannot be changed yet", () => {
+test("a dependent row is dimmed, and does not explain what is visible above it", () => {
+  // Speak-to-chat's own switch is the row above, wearing that name, and this
+  // row is dimmed. Spelling it out under both of its dependants was three
+  // lines saying what the dimming already said.
   const off = structuredClone(xm5);
   off.controls.speak_to_chat_sensitivity.available = false;
   const row = M.SECTIONS.find((s) => s.id === "behaviour")
     .rows.find((r) => r.id === "speak_to_chat_sensitivity");
-  assert.equal(M.rowState(row, off).available, false);
-  assert.ok(row.unavailableHint.length > 0);
+  const status = plain(M.rowState(row, off));
+  assert.equal(status.available, false);
+  assert.equal(M.rowReason(row, status), "");
 });
+
 
 test("a headset still being asked is not mistaken for one with no features", () => {
   // With no session there is nothing in controls, so every vendor row hides for
@@ -329,66 +334,30 @@ test("set commands are the wire format the helper parses", () => {
   assert.equal(M.setCommand({ noise: "anc" }), '{"set":{"noise":"anc"}}');
 });
 
-test("panel copy fits the width it is given, so no line wraps awkwardly", () => {
-  // The panel is about 380 logical pixels wide. A description sits beside its
-  // control and has roughly 40 characters before it wraps and shoves the switch
-  // around; a reason or hint has the full width and roughly 54. These are the
-  // budget, checked here because every previous fix for this was one string at a
-  // time and the next person adding a row would not know the limit existed.
-  const DESCRIPTION = 40;
-  const FULL_WIDTH = 54;
-  const over = [];
-  for (const section of M.SECTIONS) {
-    for (const row of section.rows) {
-      if (row.description && row.description.length > DESCRIPTION) {
-        over.push(`${row.id} description ${row.description.length} > ${DESCRIPTION}`);
-      }
-      for (const key of ["hint", "unavailableHint"]) {
-        if (row[key] && row[key].length > FULL_WIDTH) {
-          over.push(`${row.id} ${key} ${row[key].length} > ${FULL_WIDTH}`);
-        }
-      }
-    }
-  }
-  assert.deepEqual(over, []);
-});
 
-test("a reason for one row is shown on that row and beats the standing hint", () => {
+test("a reason for one row is shown on that row", () => {
   // A single line at the foot of the panel cannot say which of nine settings it
   // is about, and it used to stay there through everything the user did next.
-  const row = { id: "noise", unavailableHint: "Only applies in ambient mode" };
+  const row = { id: "noise" };
   const payload = {
     controls: { noise: { supported: true, writable: true, available: false } },
-    refused: { noise: "This headset does not have this setting" }
+    refused: { noise: "Read-only on this headset" }
   };
   const status = plain(M.rowState(row, payload));
-  assert.equal(status.refused, "This headset does not have this setting");
-  assert.equal(M.rowReason(row, status), "This headset does not have this setting");
+  assert.equal(status.refused, "Read-only on this headset");
+  assert.equal(M.rowReason(row, status), "Read-only on this headset");
 });
 
-test("with nothing refused the row falls back to why it is inactive", () => {
-  const row = { id: "ambient_level", unavailableHint: "Only applies in ambient mode" };
-  const payload = { controls: { ambient_level: { supported: true, writable: true, available: false } } };
-  const status = plain(M.rowState(row, payload));
-  assert.equal(status.refused, "");
-  assert.equal(M.rowReason(row, status), "Only applies in ambient mode");
-});
 
-test("a row the headset reports but will not change says so", () => {
-  const row = { id: "touch_sensor" };
-  const payload = { controls: { touch_sensor: { supported: true, writable: false, available: true } } };
-  const reason = M.rowReason(row, plain(M.rowState(row, payload)));
-  assert.match(reason, /does not accept changes/);
-});
 
 test("a row with nothing wrong says nothing", () => {
-  const row = { id: "noise", unavailableHint: "Only applies in ambient mode" };
+  const row = { id: "noise" };
   const payload = { controls: { noise: { supported: true, writable: true, available: true } } };
   assert.equal(M.rowReason(row, plain(M.rowState(row, payload))), "");
 });
 
 test("every reason the panel can show also fits the width", () => {
-  const wide = { id: "x", unavailableHint: "" };
+  const wide = { id: "x" };
   const cases = [
     { controls: { x: { supported: true, writable: true, available: true } }, refused: {} },
     { controls: { x: { supported: true, writable: false, available: true } } },
@@ -435,14 +404,103 @@ test("the equaliser offers presets, from the list the helper reports", () => {
   assert.deepEqual(plain(M.optionsFor(codec, payload)), ["AAC"]);
 });
 
-test("a standing hint is a warning, never a description of the row above it", () => {
-  // Every row carrying a caption made the panel read as documentation. A hint
-  // earns its place only by saying something the control cannot show: what
-  // happens as a consequence. What a row is comes from its label.
-  const hints = [];
+
+
+test("marking a repeat never writes to the shared spec", () => {
+  // One spec is shared by every panel on every monitor.
+  const payload = {
+    controls: {
+      noise: { supported: true, writable: true, available: true },
+      ambient_level: { supported: true, writable: true, available: false },
+      focus_on_voice: { supported: true, writable: true, available: false }
+    },
+    state: { noise: "off" }
+  };
+  M.visibleSections(payload);
+  M.visibleSections(payload);
   for (const section of M.SECTIONS) {
-    for (const row of section.rows) if (row.hint) hints.push(`${row.id}: ${row.hint}`);
+    for (const row of section.rows) {
+      assert.equal(row.repeatsReason, undefined, `${row.id} was written to`);
+    }
   }
-  assert.equal(hints.length, 2, hints.join(" | "));
-  for (const hint of hints) assert.match(hint, /selects Manual|reconnects/);
+});
+
+
+test("the panel carries no explanatory prose, which is Omarchy's convention", () => {
+  // Twelve stock panels between them have one secondary text, and it is a data
+  // label. An inactive control is dimmed and never explained; a secondary line
+  // is a short live status and is empty most of the time. Every description and
+  // hint here was against that, and the panel read as documentation.
+  const prose = [];
+  for (const section of M.SECTIONS) {
+    for (const row of section.rows) {
+      for (const key of ["description", "hint", "unavailableHint"]) {
+        if (row[key]) prose.push(`${row.id}.${key}`);
+      }
+    }
+  }
+  assert.deepEqual(prose, []);
+});
+
+test("an inactive row is dimmed and says nothing", () => {
+  const row = M.SECTIONS.find((s) => s.id === "noise").rows.find((r) => r.id === "ambient_level");
+  const payload = { controls: { ambient_level: { supported: true, writable: true, available: false } } };
+  const status = plain(M.rowState(row, payload));
+  assert.equal(status.available, false);
+  assert.equal(M.rowReason(row, status), "");
+});
+
+test("a row says something only about what the user has just tried", () => {
+  const row = { id: "noise" };
+  const payload = {
+    controls: { noise: { supported: true, writable: true, available: true } },
+    refused: { noise: "Read-only on this headset" }
+  };
+  assert.equal(M.rowReason(row, plain(M.rowState(row, payload))), "Read-only on this headset");
+});
+
+test("a reason is said once in a section, not under every row it applies to", () => {
+  // Two rows refused for the same reason printed the same line twice, one under
+  // the other, which reads as a stutter rather than as an explanation.
+  const payload = {
+    controls: {
+      noise: { supported: true, writable: true, available: true },
+      ambient_level: { supported: true, writable: true, available: true },
+      focus_on_voice: { supported: true, writable: true, available: true }
+    },
+    state: { noise: "off" },
+    refused: { ambient_level: "Only applies in ambient mode",
+               focus_on_voice: "Only applies in ambient mode" }
+  };
+  const section = plain(M.visibleSections(payload)).find((s) => s.id === "noise");
+  const said = section.rows
+    .map((row) => M.rowReason(row, plain(M.rowState(row, payload))))
+    .filter((text) => text !== "");
+  assert.deepEqual(said, ["Only applies in ambient mode"]);
+});
+
+test("every message the panel can show is short enough for one line", () => {
+  // The panel is about 380 logical pixels wide, which is roughly 54 characters
+  // at the caption size these are drawn in.
+  const payload = { controls: { x: { supported: true, writable: true, available: true } } };
+  for (const reason of ["Read-only on this headset", "Only applies in ambient mode",
+                        "The headset has its own equaliser", "PipeWire cannot run an equaliser here",
+                        "No such preset", "the equaliser needs a list of gains"]) {
+    const shown = M.rowReason({ id: "x" }, plain(M.rowState({ id: "x" },
+      Object.assign({ refused: { x: reason } }, payload))));
+    assert.ok(shown.length <= 54, `${shown.length}: ${shown}`);
+  }
+});
+
+test("status answers with a line, the way Omarchy's own plugins do", () => {
+  // dropbox and tailscale both return the short string they would show. The
+  // machine-readable answer is `headsetctl status --pretty`, which is JSON.
+  const line = M.statusLine({
+    present: true, device: { name: "WH-1000XM5" },
+    state: { battery: 75, noise: "anc" }, audio: { active_codec: "LDAC" }
+  });
+  assert.equal(line, "WH-1000XM5  ·  75%  ·  ANC  ·  LDAC");
+  assert.equal(line.indexOf("\n"), -1);
+  assert.equal(M.statusLine({ present: false }), "No headset connected");
+  assert.equal(M.statusLine(null), "No headset connected");
 });

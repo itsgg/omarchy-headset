@@ -45,7 +45,6 @@ Item {
       width: parent.width
       opacity: root.enabled ? 1 : 0.45
       label: root.spec.label || ""
-      description: root.reason === "" ? (root.spec.description || "") : ""
       checked: !!root.status.value
       hasCursor: root.hasCursor
       foreground: root.theme ? root.theme.foreground : Color.foreground

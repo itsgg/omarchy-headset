@@ -31,6 +31,31 @@ CLIENT_OUTBOX_LIMIT = 256 * 1024
 IDLE_TICK = 0.5
 
 
+# What to call a setting in a sentence, for the one message that cannot be shown
+# on the setting's own row: a headset that does not have it has no row either.
+# Everything the equaliser on this machine owns. Claimed and removed by the same
+# list: when these were written out twice, the preset was claimed and not
+# removed, fell through to the headset's controls, and was reported missing
+# under its internal name.
+HOST_EQUALISER_KEYS = ("eq_enabled", "eq_gains", "eq_preset_host")
+
+NAMES = {
+    "noise": "noise control",
+    "ambient_level": "an ambient level",
+    "focus_on_voice": "focus on voice",
+    "speak_to_chat": "speak-to-chat",
+    "eq_bands": "an equaliser",
+    "eq_preset": "equaliser presets",
+    "pause_on_removal": "pause on removal",
+    "voice_guidance": "voice guidance",
+    "power_off": "a power-off command",
+}
+
+
+def _named(feature: str) -> str:
+    return NAMES.get(feature, feature.replace("_", " "))
+
+
 def _log(text: str) -> None:
     """To stderr, which the shell collects, even when the helper recovers.
 
@@ -303,17 +328,16 @@ class Owner:
 
     def apply_equaliser(self, values: dict) -> bool:
         """The equaliser this machine runs. Nothing here reaches the headset."""
-        wanted = {k: v for k, v in values.items()
-                  if k in ("eq_enabled", "eq_gains", "eq_preset_host")}
+        wanted = {k: v for k, v in values.items() if k in HOST_EQUALISER_KEYS}
         if not wanted:
             return False
         if not self.host_equaliser:
-            self._refuse(wanted, "This headset has an equaliser of its own")
+            self._refuse(wanted, "The headset has its own equaliser")
             self.publish()
             return True
         if not self.equaliser.available():
             # The opposite of the message above, and it used to send that one.
-            self._refuse(wanted, "PipeWire here cannot run an equaliser")
+            self._refuse(wanted, "PipeWire cannot run an equaliser here")
             self.publish()
             return True
         # Into the headset itself, never into the equaliser's own sink. A card
@@ -329,7 +353,7 @@ class Owner:
                 # Only the preset. One command can carry the switch as well, and
                 # answering "there is no such preset" to an on/off switch is both
                 # nonsense and a refusal of something that was perfectly valid.
-                self._refuse({"eq_preset_host": None}, "There is no such preset")
+                self._refuse({"eq_preset_host": None}, "No such preset")
             else:
                 gains = list(curve)
         try:
@@ -419,8 +443,13 @@ class Owner:
     def apply(self, values: dict) -> None:
         """Write features, one frame per group of features that share a message."""
         if self.apply_equaliser(values):
-            values = {k: v for k, v in values.items() if k not in ("eq_enabled", "eq_gains")}
+            values = {k: v for k, v in values.items() if k not in HOST_EQUALISER_KEYS}
             if not values:
+                # Nothing for the headset, so the line below that clears the one
+                # message is never reached. `handle` clears it before every
+                # command, which makes this unreachable today, but nothing in
+                # this method says it depends on that.
+                self.error = ""
                 return
         if self.device is None:
             self.error = "the headset is not connected"
@@ -430,13 +459,18 @@ class Owner:
         snapshot.update(values)
         groups: dict[str, dict] = {}
         problems: dict = {}
+        missing = []
         for feature, value in values.items():
             control = self.driver.control(feature)
             if control is None or not self.device.supports(feature):
-                problems[feature] = "This headset does not have this setting"
+                # No row carries this: a setting the headset does not have is not
+                # drawn at all, so saying it on the row would say it to nobody.
+                # It can still be asked for from the bar or a keybinding, and
+                # that answer belongs in the panel's one line.
+                missing.append(feature)
                 continue
             if not control.honoured:
-                problems[feature] = "This headset reports this and does not accept changes"
+                problems[feature] = "Read-only on this headset"
                 continue
             if control.available is not None and not control.available(snapshot):
                 # The device takes these and discards them outside the right mode,
@@ -464,6 +498,10 @@ class Owner:
         # Merged, not replaced: one command can carry both an equaliser setting
         # and a headset setting, and assigning here threw away the reason the
         # equaliser half was refused a moment earlier.
+        # Set either way. Skipping it when nothing is missing left the last such
+        # message standing through every command that followed.
+        self.error = ("This headset does not have " + " or ".join(_named(f) for f in missing)
+                      if missing else "")
         self.refused.update(problems)
         self.publish()
 

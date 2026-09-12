@@ -33,6 +33,13 @@ ACKED = "acked"
 SILENT = "silent"
 FAILED = "failed"
 
+# Resolved once rather than reached for inside connect(). A Python built without
+# Bluetooth has none of these, and an AttributeError four frames down reads as a
+# bug in this program rather than as a platform that cannot do Bluetooth at all.
+# It is also what lets a test drive the whole stack on a fake socket anywhere.
+AF_BLUETOOTH = getattr(socket, "AF_BLUETOOTH", None)
+BTPROTO_RFCOMM = getattr(socket, "BTPROTO_RFCOMM", None)
+
 SOL_RFCOMM = 18
 RFCOMM_LM = 0x03
 RFCOMM_LM_AUTH = 0x0002
@@ -91,7 +98,9 @@ class Session:
     # ------------------------------------------------------------------ lifecycle
 
     def connect(self) -> None:
-        sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
+        if AF_BLUETOOTH is None or BTPROTO_RFCOMM is None:
+            raise HeadsetError("this Python was built without Bluetooth support")
+        sock = socket.socket(AF_BLUETOOTH, socket.SOCK_STREAM, BTPROTO_RFCOMM)
         try:
             with contextlib.suppress(OSError):
                 sock.setsockopt(SOL_RFCOMM, RFCOMM_LM, RFCOMM_LM_AUTH | RFCOMM_LM_ENCRYPT)

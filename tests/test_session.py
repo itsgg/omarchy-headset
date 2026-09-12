@@ -275,3 +275,18 @@ class DisciplineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlatformTests(unittest.TestCase):
+    """A Python built without Bluetooth, which is every GitHub runner."""
+
+    def test_a_python_with_no_bluetooth_says_so_rather_than_raising_an_attribute_error(self):
+        from unittest.mock import patch
+
+        from headset import session as module
+        from headset.errors import HeadsetError
+
+        with patch.object(module, "AF_BLUETOOTH", None):
+            with self.assertRaises(HeadsetError) as caught:
+                module.Session(address="AA:BB:CC:DD:EE:FF", channel=9).connect()
+        self.assertIn("Bluetooth", str(caught.exception))
