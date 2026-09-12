@@ -46,9 +46,13 @@ var TIMEOUT_OPTIONS = [
   { value: "off", label: "Never" }
 ];
 
-function speakToChatOn(state) {
-  return !!(state && state.speak_to_chat);
-}
+// The two connection modes every Bluetooth headset has. A2DP carries the good
+// codec and no microphone; the headset profile carries a microphone and a much
+// worse codec. Bluetooth offers no third option, and no headset escapes it.
+var MODE_OPTIONS = [
+  { value: "a2dp", label: "Music", tooltip: "The best codec the headset offers, and no microphone" },
+  { value: "headset", label: "Calls", tooltip: "Turns the microphone on. Audio drops to call quality." }
+];
 
 var SECTIONS = [
   {
@@ -90,11 +94,13 @@ var SECTIONS = [
       },
       {
         id: "speak_to_chat_sensitivity", kind: "segmented", label: "Sensitivity",
-        options: SENSITIVITY_OPTIONS, showWhen: speakToChatOn
+        options: SENSITIVITY_OPTIONS,
+        unavailableHint: "Switch speak-to-chat on to change this"
       },
       {
         id: "speak_to_chat_timeout", kind: "segmented", label: "Resumes after",
-        options: TIMEOUT_OPTIONS, showWhen: speakToChatOn
+        options: TIMEOUT_OPTIONS,
+        unavailableHint: "Switch speak-to-chat on to change this"
       },
       {
         id: "pause_on_removal", kind: "toggle", label: "Pause when taken off",
@@ -111,11 +117,28 @@ var SECTIONS = [
     ]
   },
   {
+    id: "audio",
+    title: "AUDIO",
+    rows: [
+      {
+        id: "codec", kind: "choice", label: "Codec", optionsFrom: "codecs",
+        hint: "What is carrying the audio now. Changing it reconnects the headset."
+      },
+      {
+        id: "audio_mode", kind: "segmented", label: "Mode", options: MODE_OPTIONS,
+        hint: "Bluetooth cannot do both at once: a microphone costs the codec."
+      },
+      {
+        id: "microphone", kind: "toggle", label: "Microphone",
+        description: "Muted for every application on this machine",
+        unavailableHint: "Switch to Calls to use the microphone"
+      }
+    ]
+  },
+  {
     id: "device",
     title: "HEADSET",
     rows: [
-      { id: "touch_sensor", kind: "readout", label: "Touch panel", format: "onOff" },
-      { id: "codec", kind: "readout", label: "Codec" },
       { id: "firmware", kind: "readout", label: "Firmware" },
       { id: "power_off", kind: "action", label: "Turn the headset off", confirm: true }
     ]
@@ -178,6 +201,16 @@ function visibleSections(payload) {
   return out;
 }
 
+// A row whose choices come from the device rather than from this file: the codecs
+// a headset offers are its own, and no list here could know them.
+function optionsFor(row, payload) {
+  if (row.id === "eq_preset") return presetOptions(payload);
+  if (!row.optionsFrom) return row.options || [];
+  var source = (payload && payload.audio) || {};
+  var list = source[row.optionsFrom];
+  return Array.isArray(list) ? list : [];
+}
+
 // Presets the device has actually reported, plus whatever it is set to now, so a
 // preset this list does not know about is still shown rather than silently dropped.
 function presetOptions(payload) {
@@ -223,8 +256,13 @@ function batteryGlyph(level, charging) {
 
 function batteryText(payload) {
   var state = (payload && payload.state) || {};
-  if (state.battery === undefined || state.battery === null) return "";
-  return state.battery + "%" + (state.charging ? " charging" : "");
+  var level = state.battery;
+  if (level === undefined || level === null) {
+    var fallback = payload && payload.bluezBattery;
+    if (fallback === undefined || fallback === null || fallback < 0) return "";
+    level = fallback;
+  }
+  return level + "%" + (state.charging ? " charging" : "");
 }
 
 function noiseSummary(payload) {
@@ -247,15 +285,107 @@ function deviceName(payload) {
 }
 
 function heroMeta(payload) {
-  if (!payload || !payload.connected) return payload && payload.error ? payload.error : "Not connected";
   var parts = [];
   var battery = batteryText(payload);
   if (battery) parts.push("Battery " + battery);
-  var state = payload.state || {};
-  if (state.codec) parts.push(state.codec);
-  return parts.join("  ·  ");
+  var sound = (payload && payload.audio) || {};
+  if (sound.active_codec) parts.push(sound.active_codec);
+  if (parts.length > 0) return parts.join("  ·  ");
+  // Nothing to say yet. Only then is the reason worth the line.
+  if (payload && payload.error) return payload.error;
+  return payload && payload.present ? "Connected" : "Not connected";
 }
 
+// While a driver is opening its session there is nothing in `controls` yet, and
+// every vendor row is hidden for exactly the same reason an unsupported headset
+// hides them. Three words are enough to tell the two apart.
+function probeNotice(payload) {
+  if (!payload || !payload.present) return "";
+  if (payload.connected || payload.unsupported) return "";
+  return "Asking the headset\u2026";
+}
+
+// The keys this particular panel has. Advertising "a noise" to a headset with no
+// noise control is a promise the panel cannot keep.
+function keyboardHint(payload) {
+  var controls = (payload && payload.controls) || {};
+  var parts = [];
+  if (controls.noise && controls.noise.writable) parts.push("a noise");
+  if (controls.noise && controls.noise.writable) parts.push("t ambient");
+  parts.push("j k rows");
+  parts.push("h l adjust");
+  parts.push("+ − value");
+  parts.push("Esc close");
+  return parts.join(" · ");
+}
+
+function batteryText(payload) {
+  var state = (payload && payload.state) || {};
+  var level = state.battery;
+  if (level === undefined || level === null) {
+    var fallback = payload && payload.bluezBattery;
+    if (fallback === undefined || fallback === null || fallback < 0) return "";
+    level = fallback;
+  }
+  return level + "%" + (state.charging ? " charging" : "");
+}
+
+function noiseSummary(payload) {
+  var state = (payload && payload.state) || {};
+  if (state.noise === "anc") return "Noise cancelling";
+  if (state.noise === "ambient") {
+    var level = state.ambient_level;
+    var suffix = (level === undefined || level === null) ? "" : " " + level + "/" + AMBIENT_MAX;
+    return "Ambient sound" + suffix;
+  }
+  if (state.noise === "wind") return "Wind noise reduction";
+  if (state.noise === "off") return "Noise control off";
+  return "";
+}
+
+function deviceName(payload) {
+  var device = (payload && payload.device) || {};
+  var name = String(device.name || "").trim();
+  return name === "" ? "Headset" : name;
+}
+
+function heroMeta(payload) {
+  var parts = [];
+  var battery = batteryText(payload);
+  if (battery) parts.push("Battery " + battery);
+  var sound = (payload && payload.audio) || {};
+  if (sound.active_codec) parts.push(sound.active_codec);
+  if (parts.length > 0) return parts.join("  ·  ");
+  // Nothing to say yet. Only then is the reason worth the line.
+  if (payload && payload.error) return payload.error;
+  return payload && payload.present ? "Connected" : "Not connected";
+}
+
+// While a driver is opening its session there is nothing in `controls` yet, and
+// every vendor row is hidden for exactly the same reason an unsupported headset
+// hides them. Three words are enough to tell the two apart.
+function probeNotice(payload) {
+  if (!payload || !payload.present) return "";
+  if (payload.connected || payload.unsupported) return "";
+  return "Asking the headset\u2026";
+}
+
+// The keys this particular panel has. Advertising "a noise" to a headset with no
+// noise control is a promise the panel cannot keep.
+function keyboardHint(payload) {
+  var controls = (payload && payload.controls) || {};
+  var parts = [];
+  if (controls.noise && controls.noise.writable) parts.push("a noise");
+  if (controls.noise && controls.noise.writable) parts.push("t ambient");
+  parts.push("j k rows");
+  parts.push("h l adjust");
+  parts.push("+ − value");
+  parts.push("Esc close");
+  return parts.join(" · ");
+}
+
+// What the panel says when no driver claims this headset: not an error, just the
+// boundary of what Bluetooth standardises.
 function tooltipText(payload) {
   var lines = [deviceName(payload)];
   var meta = heroMeta(payload);

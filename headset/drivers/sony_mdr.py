@@ -354,6 +354,10 @@ def _ambient_mode(state: dict) -> bool:
     return state.get("noise") == NOISE_AMBIENT
 
 
+def _speak_to_chat_on(state: dict) -> bool:
+    return bool(state.get("speak_to_chat"))
+
+
 CONTROLS = (
     Control("noise", encode_noise, record="noise", key="noise"),
     Control("ambient_level", encode_noise, record="noise", key="noise", available=_ambient_mode),
@@ -364,10 +368,15 @@ CONTROLS = (
     # grouping them together let one encoder swallow the other's values.
     Control("eq_preset", encode_eq_preset, record="equalizer", key="eq_preset"),
     Control("speak_to_chat", encode_speak_to_chat, record="speak_to_chat", key="speak_to_chat"),
+    # Gated rather than hidden: a row that appears when its parent is switched on
+    # moves every row beneath it, and a settings list that rearranges itself is
+    # measurably slower to use than one that does not.
     Control("speak_to_chat_sensitivity", encode_speak_to_chat_config,
-            record="speak_to_chat_config", key="speak_to_chat_config"),
+            record="speak_to_chat_config", key="speak_to_chat_config",
+            available=_speak_to_chat_on),
     Control("speak_to_chat_timeout", encode_speak_to_chat_config,
-            record="speak_to_chat_config", key="speak_to_chat_config"),
+            record="speak_to_chat_config", key="speak_to_chat_config",
+            available=_speak_to_chat_on),
     Control("pause_on_removal", encode_pause_on_removal, record="pause_on_removal", key="pause_on_removal"),
     Control("voice_guidance", encode_voice_guidance, record="voice_guidance", key="voice_guidance"),
     Control("dsee", encode_dsee, record="dsee", key="dsee"),

@@ -18,7 +18,10 @@ Column {
 
   spacing: Style.space(4)
   enabled: !!status.writable && status.available !== false
-  opacity: enabled ? 1 : 0.45
+
+  // Dim the control, never the words. WCAG 1.4.3 withdraws the contrast floor
+  // from an inactive component, so a blanket opacity lands hardest on the one
+  // piece of text the user most needs to read: the reason it is inactive.
 
   function labelFor(value) {
     for (var i = 0; i < root.options.length; i++) {
@@ -55,6 +58,7 @@ Column {
   CursorSurface {
     width: parent.width
     height: group.implicitHeight + Style.space(8)
+    opacity: root.enabled ? 1 : 0.45
     hasCursor: root.hasCursor
     foreground: root.theme ? root.theme.foreground : Color.foreground
     HoverHandler { onHoveredChanged: root.hovered(hovered) }

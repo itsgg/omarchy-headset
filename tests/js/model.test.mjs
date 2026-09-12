@@ -80,20 +80,40 @@ test("a section disappears when its features do, rather than rendering empty", (
   assert.ok(sectionIds(noEq).includes("noise"));
 });
 
-test("speak-to-chat detail rows appear only once it is switched on", () => {
-  assert.deepEqual(rowIds(xm5, "behaviour"),
-    ["speak_to_chat", "pause_on_removal", "voice_guidance", "dsee"]);
+test("the rows stay put whether speak-to-chat is on or off", () => {
+  // They used to appear when it was switched on, moving every row below them.
+  // A settings list that rearranges itself is measurably slower to use.
+  const rows = ["speak_to_chat", "speak_to_chat_sensitivity", "speak_to_chat_timeout",
+                "pause_on_removal", "voice_guidance", "dsee"];
+  assert.deepEqual(rowIds(xm5, "behaviour"), rows);
   const talking = structuredClone(xm5);
   talking.state.speak_to_chat = true;
-  assert.deepEqual(rowIds(talking, "behaviour"),
-    ["speak_to_chat", "speak_to_chat_sensitivity", "speak_to_chat_timeout",
-     "pause_on_removal", "voice_guidance", "dsee"]);
+  assert.deepEqual(rowIds(talking, "behaviour"), rows);
 });
 
-test("a control the hardware ignores is shown, but not as writable", () => {
-  const touch = M.rowState({ id: "touch_sensor", kind: "readout" }, xm5);
-  assert.equal(touch.supported, true);
-  assert.equal(touch.writable, false);
+test("a dependent row says why it cannot be changed yet", () => {
+  const off = structuredClone(xm5);
+  off.controls.speak_to_chat_sensitivity.available = false;
+  const row = M.SECTIONS.find((s) => s.id === "behaviour")
+    .rows.find((r) => r.id === "speak_to_chat_sensitivity");
+  assert.equal(M.rowState(row, off).available, false);
+  assert.ok(row.unavailableHint.length > 0);
+});
+
+test("a headset still being asked is not mistaken for one with no features", () => {
+  // With no session there is nothing in controls, so every vendor row hides for
+  // exactly the same reason an unsupported headset hides them.
+  assert.ok(M.probeNotice({ present: true, connected: false, unsupported: false }).length > 0);
+  assert.equal(M.probeNotice({ present: true, connected: true }), "");
+  assert.equal(M.probeNotice({ present: true, unsupported: true }), "");
+  assert.equal(M.probeNotice({ present: false }), "");
+});
+
+test("a control that can be neither changed nor acted on gets no row", () => {
+  // The touch panel is acknowledged and ignored by the headset, so a row for it
+  // showed a value nobody could change and nobody would do anything about.
+  const rows = M.SECTIONS.flatMap((s) => s.rows.map((r) => r.id));
+  assert.ok(!rows.includes("touch_sensor"));
 });
 
 test("ambient level is present but unavailable until ambient mode is chosen", () => {
@@ -184,6 +204,86 @@ test("the device keeps its name even when the helper has none", () => {
   assert.equal(M.deviceName(xm5), "WH-1000XM5");
   assert.equal(M.deviceName({ device: { name: "  " } }), "Headset");
   assert.equal(M.deviceName({}), "Headset");
+});
+
+// A headset with no driver: everything BlueZ and PipeWire know, and nothing else.
+const nothing = {
+  connected: false,
+  present: true,
+  unsupported: true,
+  device: { address: "3C:B0:ED:50:BC:9C", name: "Nothing Ear (open)", driver: "", channel: 0 },
+  support: {},
+  controls: {
+    codec: { supported: true, writable: true, available: true },
+    audio_mode: { supported: true, writable: true, available: true },
+    microphone: { supported: true, writable: false, available: false },
+  },
+  state: { codec: "a2dp-sink", audio_mode: "a2dp", microphone: false },
+  audio: {
+    card: "bluez_card.3C_B0_ED_50_BC_9C",
+    active_codec: "AAC",
+    active_profile: "a2dp-sink",
+    mode: "a2dp",
+    best_listening: "a2dp-sink",
+    headset_profile: "headset-head-unit",
+    has_microphone: true,
+    codecs: [
+      { value: "a2dp-sink-sbc", label: "SBC" },
+      { value: "a2dp-sink-sbc_xq", label: "SBC-XQ" },
+      { value: "a2dp-sink", label: "AAC" },
+    ],
+  },
+  bluezBattery: 100,
+  pending: [],
+  ignored: [],
+  error: "",
+};
+
+test("a headset with no driver still gets a panel", () => {
+  // It used to hide entirely, throwing away a battery, a codec and a microphone
+  // that BlueZ and PipeWire knew about the whole time.
+  assert.deepEqual(sectionIds(nothing), ["audio"]);
+  assert.deepEqual(rowIds(nothing, "audio"), ["codec", "audio_mode", "microphone"]);
+});
+
+test("a headset with a driver gets both tiers", () => {
+  const both = structuredClone(xm5);
+  both.audio = structuredClone(nothing.audio);
+  both.controls.codec = { supported: true, writable: true, available: true };
+  both.controls.audio_mode = { supported: true, writable: true, available: true };
+  both.controls.microphone = { supported: true, writable: true, available: false };
+  assert.deepEqual(sectionIds(both), ["noise", "equalizer", "behaviour", "audio", "device"]);
+});
+
+test("the codec choices come from the headset, not from this file", () => {
+  const options = plain(M.optionsFor({ id: "codec", optionsFrom: "codecs" }, nothing));
+  assert.deepEqual(options.map((o) => o.label), ["SBC", "SBC-XQ", "AAC"]);
+  assert.deepEqual(plain(M.optionsFor({ id: "codec", optionsFrom: "codecs" }, {})), []);
+});
+
+test("a row with fixed choices keeps them", () => {
+  const mode = M.SECTIONS.find((s) => s.id === "audio").rows.find((r) => r.id === "audio_mode");
+  assert.deepEqual(plain(M.optionsFor(mode, nothing)).map((o) => o.value), ["a2dp", "headset"]);
+});
+
+test("the hero reads battery from bluez and the codec from pipewire", () => {
+  // Neither needs a control session, which is the point.
+  const meta = M.heroMeta(nothing);
+  assert.ok(meta.includes("100%"), meta);
+  assert.ok(meta.includes("AAC"), meta);
+  assert.equal(M.deviceName(nothing), "Nothing Ear (open)");
+});
+
+test("a headset with no driver is not lectured at", () => {
+  // The panel shows the rows it has. A paragraph about which layer of Bluetooth
+  // standardises what belongs in the README, not in a bar panel.
+  assert.equal(typeof M.vendorNotice, "undefined");
+});
+
+test("the keyboard hint promises only keys this panel has", () => {
+  assert.ok(!M.keyboardHint(nothing).includes("noise"));
+  assert.ok(M.keyboardHint(nothing).includes("j k rows"));
+  assert.ok(M.keyboardHint(xm5).includes("a noise"));
 });
 
 test("set commands are the wire format the helper parses", () => {

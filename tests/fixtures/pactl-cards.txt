@@ -1,0 +1,119 @@
+Card #0
+	Name: alsa_card.pci-0000_00_1f.3
+	Driver: alsa
+	Owner Module: n/a
+	Properties:
+		device.enum.api = "udev"
+		device.api = "alsa"
+		media.class = "Audio/Device"
+		api.alsa.path = "hw:0"
+		api.alsa.card = "0"
+		api.alsa.card.name = "HDA Intel PCH"
+		api.alsa.card.longname = "HDA Intel PCH at 0x50232c0000 irq 204"
+		device.plugged.usec = "23662458"
+		device.bus_path = "pci-0000:00:1f.3"
+		sysfs.path = "/devices/pci0000:00/0000:00:1f.3/sound/card0"
+		device.bus = "pci"
+		device.subsystem = "sound"
+		device.vendor.id = "0x8086"
+		device.vendor.name = "Intel Corporation"
+		device.product.id = "0x7e28"
+		device.product.name = "Meteor Lake-P HD Audio Controller"
+		device.form_factor = "internal"
+		device.name = "alsa_card.pci-0000_00_1f.3"
+		device.description = "Built-in Audio"
+		device.nick = "HDA Intel PCH"
+		device.icon_name = "audio-card-analog-pci"
+		api.alsa.use-acp = "true"
+		api.acp.auto-profile = "false"
+		api.acp.auto-port = "false"
+		api.dbus.ReserveDevice1.Priority = "-20"
+		api.alsa.split-enable = "true"
+		api.dbus.ReserveDevice1 = "Audio0"
+		spa.object.id = "2"
+		factory.id = "15"
+		client.id = "46"
+		object.id = "54"
+		object.serial = "54"
+		object.path = "alsa:acp:PCH"
+		alsa.card = "0"
+		alsa.card_name = "HDA Intel PCH"
+		alsa.long_card_name = "HDA Intel PCH at 0x50232c0000 irq 204"
+Card #99
+	Name: bluez_card.3C_B0_ED_50_BC_9C
+	Driver: module-bluez5-device.c
+	Owner Module: n/a
+	Properties:
+		device.api = "bluez5"
+		device.bus = "bluetooth"
+		media.class = "Audio/Device"
+		device.name = "bluez_card.3C_B0_ED_50_BC_9C"
+		device.description = "Nothing Ear (open)"
+		device.alias = "Nothing Ear (open)"
+		device.vendor.id = "bluetooth:02b0"
+		device.product.id = "0x0000"
+		device.form_factor = "headset"
+		device.icon_name = "audio-headset-bluetooth"
+		device.string = "3C:B0:ED:50:BC:9C"
+		api.bluez5.icon = "audio-headset"
+		api.bluez5.path = "/org/bluez/hci0/dev_3C_B0_ED_50_BC_9C"
+		api.bluez5.address = "3C:B0:ED:50:BC:9C"
+		api.bluez5.device = ""
+		api.bluez5.class = "0x240404"
+		api.bluez5.connection = "connected"
+		bluez5.profile = "off"
+		spa.object.id = "36"
+		bluez5.auto-connect = "[ a2dp_sink a2dp_source ]"
+		factory.id = "15"
+		client.id = "46"
+		object.id = "88"
+		object.serial = "9008"
+	Profiles:
+		off: Off (sinks: 0, sources: 0, priority: 0, available: yes)
+		a2dp-sink-sbc: High Fidelity Playback (A2DP Sink, codec SBC) (sinks: 1, sources: 0, priority: 132, available: yes)
+		a2dp-sink-sbc_xq: High Fidelity Playback (A2DP Sink, codec SBC-XQ) (sinks: 1, sources: 0, priority: 131, available: yes)
+		a2dp-sink: High Fidelity Playback (A2DP Sink, codec AAC) (sinks: 1, sources: 0, priority: 133, available: yes)
+		headset-head-unit-cvsd: Headset Head Unit (HSP/HFP, codec CVSD) (sinks: 1, sources: 1, priority: 5, available: yes)
+		headset-head-unit: Headset Head Unit (HSP/HFP, codec MSBC) (sinks: 1, sources: 1, priority: 6, available: yes)
+	Active Profile: a2dp-sink
+	Ports:
+		headset-input: Handsfree (type: Headset, priority: 0, latency offset: 0 usec, available)
+			Properties:
+				port.type = "headset"
+			Part of profile(s): headset-head-unit-cvsd, headset-head-unit
+		headset-output: Headphones (type: Headset, priority: 0, latency offset: 0 usec, available)
+			Properties:
+				port.type = "headset"
+				device.icon_name = "audio-headphones-bluetooth"
+			Part of profile(s): a2dp-sink-sbc, a2dp-sink-sbc_xq, a2dp-sink
+		headset-hf-output: Handsfree (type: Headset, priority: 0, latency offset: 0 usec, available)
+			Properties:
+				port.type = "headset"
+				device.icon_name = "audio-headset-bluetooth"
+			Part of profile(s): headset-head-unit-cvsd, headset-head-unit
+Card #100
+	Name: bluez_card.AC_80_0A_44_B3_93
+	Driver: module-bluez5-device.c
+	Owner Module: n/a
+	Properties:
+		device.api = "bluez5"
+		device.bus = "bluetooth"
+		media.class = "Audio/Device"
+		device.name = "bluez_card.AC_80_0A_44_B3_93"
+		device.description = "WH-1000XM5"
+		device.alias = "WH-1000XM5"
+		device.form_factor = "headset"
+		device.icon_name = "audio-headset-bluetooth"
+		device.string = "AC:80:0A:44:B3:93"
+		api.bluez5.icon = "audio-headset"
+		api.bluez5.address = "AC:80:0A:44:B3:93"
+		api.bluez5.connection = "connected"
+	Profiles:
+		off: Off (sinks: 0, sources: 0, priority: 0, available: yes)
+		a2dp-sink-sbc: High Fidelity Playback (A2DP Sink, codec SBC) (sinks: 1, sources: 0, priority: 132, available: yes)
+		a2dp-sink-sbc_xq: High Fidelity Playback (A2DP Sink, codec SBC-XQ) (sinks: 1, sources: 0, priority: 131, available: yes)
+		a2dp-sink-aac: High Fidelity Playback (A2DP Sink, codec AAC) (sinks: 1, sources: 0, priority: 133, available: yes)
+		a2dp-sink: High Fidelity Playback (A2DP Sink, codec LDAC) (sinks: 1, sources: 0, priority: 134, available: yes)
+		headset-head-unit-cvsd: Headset Head Unit (HSP/HFP, codec CVSD) (sinks: 1, sources: 1, priority: 6, available: yes)
+		headset-head-unit: Headset Head Unit (HSP/HFP, codec MSBC) (sinks: 1, sources: 1, priority: 7, available: yes)
+	Active Profile: a2dp-sink

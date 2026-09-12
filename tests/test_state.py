@@ -82,12 +82,26 @@ class ConvergenceTests(unittest.TestCase):
         # Otherwise the panel shows the unapplied value for ever, and a change
         # made on the headset itself is read as our own stale echo and ignored.
         self.state.expect({"noise": "anc"})
+        self.assertEqual(self.state.snapshot()["noise"], "anc")
         self.clock[0] += CONVERGE_SECONDS + 1
         self.assertEqual(self.state.ignored(), ["noise"])
-        self.assertEqual(self.state.observe({"noise": "off"}), {"noise": "off"})
+        # Shown as the headset has it, not as it was asked for. A requested value
+        # the hardware never took is a misreport however it is labelled.
+        self.assertEqual(self.state.snapshot()["noise"], "off")
+        self.state.observe({"noise": "off"})
         self.assertEqual(self.state.snapshot()["noise"], "off")
         self.assertEqual(self.state.unconfirmed(), [])
         self.assertEqual(self.state.ignored(), [])
+
+    def test_the_loop_is_told_when_a_write_is_about_to_give_up(self):
+        self.assertIsNone(self.state.next_deadline())
+        self.state.expect({"noise": "anc"})
+        self.assertAlmostEqual(self.state.next_deadline(), CONVERGE_SECONDS, places=3)
+        # Once it has passed there is nothing left to wake for: the panel was
+        # told when it expired. Returning zero here woke the loop twenty times a
+        # second for the rest of the session.
+        self.clock[0] += CONVERGE_SECONDS + 5
+        self.assertIsNone(self.state.next_deadline())
 
     def test_forgetting_drops_the_readings_and_the_marks(self):
         self.state.expect({"noise": "anc"})

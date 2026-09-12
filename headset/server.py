@@ -176,6 +176,9 @@ class Owner:
         # Set when the headset is one this driver can never talk to. Retrying that
         # every minute for the life of the session helps nobody.
         self.hopeless = False
+        # What the panel was last told had gone unanswered, so a write giving up
+        # is published even though no reading arrived to prompt it.
+        self.reported_ignored: list = []
         # True while the opening read is still in flight. Publishing during it
         # shows a panel a device that is connected and has no settings yet.
         self.quiet = False
@@ -353,6 +356,9 @@ class Owner:
 
     def _timeout(self) -> float:
         waits = [IDLE_TICK]
+        giving_up = self.state.next_deadline()
+        if giving_up is not None:
+            waits.append(max(0.05, giving_up))
         if self.device is None:
             # Nothing to wake for when there will be no further attempt. Adding
             # the "and not hopeless" to the condition alone dropped through to
@@ -435,6 +441,13 @@ class Owner:
                 except HeadsetError as error:
                     self.drop(str(error))
                     continue
+
+            # A write that has just given up changes the panel with nothing else
+            # to announce it.
+            gave_up = self.state.ignored()
+            if gave_up != self.reported_ignored:
+                self.reported_ignored = gave_up
+                self.publish()
 
             # The last watcher left and the widget that started us is gone.
             if self.stdin is not None and not self.stdin.open and not self.clients:

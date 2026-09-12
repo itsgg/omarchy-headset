@@ -17,7 +17,7 @@ import re
 import subprocess
 import sys
 
-from . import client, drivers, server
+from . import audio, client, drivers, server
 from .device import Device
 from .errors import HeadsetError
 
@@ -214,6 +214,11 @@ def build_parser() -> argparse.ArgumentParser:
     getter = subs.add_parser("get", parents=[common], help="read one feature")
     getter.add_argument("feature")
     getter.set_defaults(run=cmd_get)
+    # The tier every headset has, driver or no driver.
+    sound = subs.add_parser("audio", parents=[common],
+                            help="codec and connection mode, for any headset")
+    sound.add_argument("profile", nargs="?", help="switch to this profile first")
+    sound.set_defaults(run=audio.cmd_audio)
     return parser
 
 

@@ -31,10 +31,11 @@ Item {
     anchors.right: parent.right
     anchors.rightMargin: Style.space(6)
     anchors.verticalCenter: parent.verticalCenter
-    // An asterisk marks a value this session asked for and the headset has not
-    // confirmed. It is not decoration: the device reports the old value for a
-    // while after a write, and pretending otherwise is how a panel lies.
-    text: root.value + (root.ignored ? "  not applied" : root.pending ? " *" : "")
+    // Words, not glyphs. An asterisk already means "required field" everywhere
+    // else in an interface, and a glyph alone carries nothing to a screen reader
+    // (WCAG 1.4.1). "sending" says what is happening; "not applied" says what
+    // did not, beside the value the headset is actually using.
+    text: root.value + (root.ignored ? "  not applied" : root.pending ? "  sending" : "")
     textFormat: Text.PlainText
     color: root.ignored
       ? (root.theme ? root.theme.urgent : "#c33")

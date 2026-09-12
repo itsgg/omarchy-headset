@@ -34,14 +34,36 @@ class State:
     now: object = time.monotonic
 
     def snapshot(self) -> dict:
+        """What the panel should show: readings, with unconfirmed writes over them.
+
+        A write that has gone unconfirmed for long enough stops being shown. The
+        panel's job is to report the headset, and a requested value that the
+        hardware never took is a misreport however it is labelled.
+        """
         out = dict(self.values)
+        moment = self.now()
         for key, entry in self.pending.items():
-            out[key] = entry.value
+            if moment - entry.since <= CONVERGE_SECONDS:
+                out[key] = entry.value
         return out
 
     def unconfirmed(self) -> list:
         """Controls whose written value the device has not caught up with yet."""
         return sorted(self.pending)
+
+    def next_deadline(self) -> float | None:
+        """Seconds until the earliest unconfirmed write gives up, or None.
+
+        The panel changes at that moment with no reading to prompt it, so the
+        loop has to wake for it or the reverted value sits on screen unseen.
+        """
+        moment = self.now()
+        waits = [entry.since + CONVERGE_SECONDS - moment
+                 for entry in self.pending.values()
+                 if entry.since + CONVERGE_SECONDS > moment]
+        # Entries already past their deadline have been reported. Continuing to
+        # return zero for them wakes the loop twenty times a second for ever.
+        return min(waits) if waits else None
 
     def ignored(self) -> list:
         """Written, acknowledged, and still not reflected long afterwards."""

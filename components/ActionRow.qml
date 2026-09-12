@@ -27,6 +27,7 @@ Item {
 
   Button {
     id: button
+    opacity: root.enabled ? 1 : 0.45
     anchors.left: parent.left
     anchors.leftMargin: Style.space(4)
     anchors.verticalCenter: parent.verticalCenter

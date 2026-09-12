@@ -1,24 +1,44 @@
 # Headset for Omarchy
 
-Control a Bluetooth headset from the [Omarchy](https://omarchy.org/) bar: noise
-cancelling, ambient sound, the hardware equaliser, battery, and the behaviour
-settings that normally need a phone. It speaks the headset's own protocol over
-Bluetooth. No vendor app, no daemon to install, no root, no udev rule.
+Control a Bluetooth headset from the [Omarchy](https://omarchy.org/) bar. Every
+headset gets battery, the codec carrying the audio, and the music-or-calls
+trade-off that silently halves your audio quality when you join a meeting. A
+headset with a driver gets its noise cancelling, equaliser and behaviour settings
+as well, spoken in that manufacturer's own protocol.
+
+No vendor app, no daemon to install, no root, no udev rule.
 
 <img src="docs/panel.png" alt="The headset panel: noise control, equaliser and behaviour settings" width="380">
 
-Built for the **Sony WH-1000XM5**, which is the headset every byte below was read
-off. The architecture is not Sony-shaped: a driver says which questions a headset
-answers and how to encode a change, and the panel draws whatever the driver
-reports. Adding a headset is a module, not a redesign.
+## Two tiers, and why
+
+Bluetooth standardises the audio, not the headset. There is no vendor-neutral way
+to control noise cancelling or an equaliser, which I checked rather than assumed:
+nothing in PipeWire's Bluetooth plugin relates to either, and the single
+"Equalizer" string in `bluetoothd` is an AVRCP player setting pointing the other
+way, at your music player, on or off, no bands.
+
+So the panel is built in two tiers.
+
+| | What you get | Where it comes from |
+| --- | --- | --- |
+| **Every headset** | Battery, the codec in use and the choice of codec, music-or-calls mode, microphone | BlueZ and PipeWire, no vendor protocol |
+| **With a driver** | Noise cancelling, ambient sound, equaliser, speak-to-chat, pause on removal, voice guidance, DSEE, power off | The manufacturer's own protocol |
+
+One driver ships, Sony MDR over RFCOMM, and every byte of it was read off a
+WH-1000XM5. A headset with no driver still gets a useful panel rather than
+nothing, which is the point of the split.
 
 ## Compatibility
 
 - Omarchy with its Quickshell bar, tested on **4.0.3-1**.
 - Python 3 and BlueZ, both already on the system. Standard library only: nothing
   to compile, nothing to pip install, no D-Bus bindings.
-- Sony headsets speaking the **v2** MDR protocol. Every record here is written
-  for v2, so the list below is what the evidence supports and nothing more:
+- **Any** Bluetooth headset, for the first tier. Battery needs the headset to
+  report it over the hands-free profile, which most do and the cheapest do not.
+- Sony headsets speaking the **v2** MDR protocol, for the driver tier. Every
+  record is written for v2, so this list is what the evidence supports and no
+  more:
 
 | Model | Basis |
 | --- | --- |
@@ -35,6 +55,11 @@ stays empty for no stated reason.
 Everything but the XM5 is unverified by me. The panel is built from what the
 headset answers rather than from a table, so an unverified model shows the rows
 it actually supports and nothing it does not. Reports welcome either way.
+
+A headset with no driver is not a headset with an empty panel. This is a Nothing
+Ear (open), which has no driver here at all:
+
+<img src="docs/no-driver.png" alt="A headset with no driver: battery, codec, mode and microphone" width="340">
 
 ## Install
 

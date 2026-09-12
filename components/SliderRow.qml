@@ -17,7 +17,10 @@ Column {
 
   spacing: Style.space(4)
   enabled: !!status.writable && status.available !== false
-  opacity: enabled ? 1 : 0.45
+
+  // Dim the control, never the words. WCAG 1.4.3 withdraws the contrast floor
+  // from an inactive component, so a blanket opacity lands hardest on the one
+  // piece of text the user most needs to read: the reason it is inactive.
 
   readonly property int minimum: root.spec.minimum === undefined ? 0 : root.spec.minimum
   readonly property int maximum: root.spec.maximum === undefined ? 10 : root.spec.maximum
@@ -47,6 +50,7 @@ Column {
   CursorSurface {
     width: parent.width
     height: slider.implicitHeight + Style.spacing.controlGap
+    opacity: root.enabled ? 1 : 0.45
     hasCursor: root.hasCursor
     outline: true
     foreground: root.theme ? root.theme.foreground : Color.foreground
@@ -81,7 +85,9 @@ Column {
     text: root.status.available === false && root.spec.unavailableHint
       ? root.spec.unavailableHint : (root.spec.hint || "")
     textFormat: Text.PlainText
-    color: root.theme ? root.theme.faint : "#666"
+    color: root.status.available === false && root.spec.unavailableHint
+      ? (root.theme ? root.theme.dim : "#888")
+      : (root.theme ? root.theme.faint : "#666")
     font.family: root.theme ? root.theme.fontFamily : Style.font.family
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap

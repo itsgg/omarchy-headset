@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import Quickshell.Io
 import Quickshell.Bluetooth
+import Quickshell.Services.Pipewire
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
@@ -46,6 +47,60 @@ Panel {
   readonly property int bluezBattery: headset && headset.batteryAvailable
     ? Math.round(headset.battery * 100) : -1
 
+  // ------------------------------------------------------- the tier every headset has
+  //
+  // None of this is vendor protocol. BlueZ knows the battery, PipeWire knows the
+  // codec and holds the microphone, and both know them for a headset no driver
+  // has ever heard of. A vendor driver adds noise control and an equaliser on
+  // top; it is the extra, not the price of entry.
+  readonly property var pipewireNodes: Pipewire.nodes ? Pipewire.nodes.values : []
+
+  function nodeForAddress(wantSink) {
+    for (var i = 0; i < pipewireNodes.length; i++) {
+      var node = pipewireNodes[i]
+      if (!node || node.isStream || node.isSink !== wantSink) continue
+      var props = node.properties || ({})
+      if (String(props["api.bluez5.address"] || "") === root.headsetAddress) return node
+    }
+    return null
+  }
+
+  readonly property var sinkNode: root.headsetAddress === "" ? null : nodeForAddress(true)
+  readonly property var sourceNode: root.headsetAddress === "" ? null : nodeForAddress(false)
+
+  // Switching a profile tears these down and builds new ones, whoever did the
+  // switching. Watching them is how the panel notices a call taking the headset
+  // to call quality without anybody touching this widget.
+  readonly property string audioShape:
+    (root.sinkNode ? String(root.sinkNode.name || "") : "-") + "|"
+    + (root.sourceNode ? String(root.sourceNode.name || "") : "-")
+  onAudioShapeChanged: if (root.headsetAddress !== "") audioSettle.restart()
+  readonly property bool microphoneMuted: sourceNode && sourceNode.audio ? sourceNode.audio.muted : false
+
+  // The card, its profiles and which codec each one carries. PipeWire's QML API
+  // exposes nodes but not cards, and profiles live on the card, so this one
+  // reading comes from the helper.
+  property var audioCard: ({ codecs: [], profiles: [], mode: "", active_codec: "",
+                             active_profile: "", headset_profile: "", best_listening: "",
+                             has_microphone: false, card: "" })
+  property bool audioSwitching: false
+  // The headset the running read or switch was started for, and a profile asked
+  // for while it was busy. Without the first, a result from the headset you just
+  // unplugged lands in the panel of the one you plugged in; without the second, a
+  // choice made mid-read is silently dropped, because assigning `running = true`
+  // to a process that is already running does nothing at all.
+  property string audioFor: ""
+  property string audioQueued: ""
+
+  PwObjectTracker {
+    objects: {
+      var out = []
+      if (root.sinkNode) out.push(root.sinkNode)
+      if (root.sourceNode) out.push(root.sourceNode)
+      return out
+    }
+  }
+
   // ------------------------------------------------------------------- helper IO
   //
   // resolvedUrl percent-encodes, so a plugin directory containing a space would
@@ -66,18 +121,61 @@ Panel {
   readonly property var sections: Model.visibleSections(root.viewPayload)
   // One object for Model.js to read, so the bluez battery fallback is visible to
   // the same functions that format the session's own reading.
+  // One object for the panel to read: the helper's view, plus everything BlueZ
+  // and PipeWire know, normalised into the same `state` and `controls` shape so
+  // a row component cannot tell the two tiers apart.
   readonly property var viewPayload: {
     var merged = {}
     for (var key in payload) merged[key] = payload[key]
     merged.bluezBattery = root.bluezBattery
+    merged.present = root.headset !== null
+    merged.unsupported = root.unsupported
+    merged.audio = root.audioCard
+
     // The helper's own view of the device is gone while it is restarting, and
     // bluez still knows the name, so the panel keeps saying whose headset it is
     // instead of falling back to the word "Headset".
     if (!merged.device || !merged.device.name) {
       merged.device = { name: root.headsetName, address: root.headsetAddress }
     }
+
+    var state = {}
+    for (var k in (merged.state || {})) state[k] = merged.state[k]
+    var controls = {}
+    for (var c in (merged.controls || {})) controls[c] = merged.controls[c]
+
+    var sound = root.audioCard
+    var codecs = sound.codecs || []
+    var talking = sound.mode === "headset"
+    if (sound.card !== undefined && sound.card !== "") {
+      state.codec = sound.active_profile
+      // Only the two real modes. Reporting anything else, "off" included, as
+      // Music selects a chip for a state the headset is not in.
+      if (sound.mode === "headset" || sound.mode === "a2dp") {
+        state.audio_mode = sound.mode
+      }
+      state.microphone = root.sourceNode !== null && !root.microphoneMuted
+      controls.codec = { supported: codecs.length > 0, writable: codecs.length > 1, available: true }
+      controls.audio_mode = {
+        supported: codecs.length > 0 && sound.headset_profile !== "",
+        writable: codecs.length > 0 && sound.headset_profile !== "",
+        available: true
+      }
+      // Writable in principle whenever the headset has a microphone at all;
+      // available only once the mode that carries it is selected. Conflating the
+      // two told the user the headset refuses changes, when it simply is not in
+      // the mode that has a microphone.
+      controls.microphone = {
+        supported: sound.headset_profile !== "",
+        writable: sound.headset_profile !== "",
+        available: root.sourceNode !== null
+      }
+    }
+    merged.state = state
+    merged.controls = controls
     return merged
   }
+
   readonly property bool live: !!payload.connected
   readonly property bool writable: !!payload.write_ready
 
@@ -85,6 +183,7 @@ Panel {
   // claiming the same string printed a dropped link twice, one above the other.
   readonly property string notice: {
     var reported = String(payload.error || "") || root.helperError
+    if (root.unsupported) return reported && reported.indexOf("no driver") === -1 ? reported : ""
     if (!root.live) return reported || "Waiting for the headset's control channel."
     return reported
   }
@@ -97,7 +196,9 @@ Panel {
   // delegate binds the property to itself and QML reports a loop.
   Theme { id: appTheme; bar: root.bar }
 
-  visible: root.headset !== null && !root.unsupported
+  // Shown for any connected headset. Hiding when no driver claimed it threw away
+  // the battery, the codec and the microphone, all of which are known regardless.
+  visible: root.headset !== null
   implicitWidth: visible ? button.implicitWidth : 0
   implicitHeight: visible ? button.implicitHeight : 0
 
@@ -106,20 +207,54 @@ Panel {
   // --------------------------------------------------------------------- commands
 
   function send(line) {
-    if (!helper.running) {
-      root.helperError = "The headset helper is not running"
-      return
-    }
+    // Silent when there is no vendor helper: a headset with no driver is the
+    // normal case, not a fault, and saying so on every panel open was noise.
+    if (!helper.running || root.unsupported) return
     helper.write(line + "\n")
   }
 
+  // Features of the universal tier. They are written to PipeWire, not to the
+  // headset, and they work whether or not a driver has ever claimed this model.
+  readonly property var universalFeatures: ["codec", "audio_mode", "microphone"]
+
+  function applyUniversal(feature, value) {
+    if (feature === "microphone") {
+      if (!root.sourceNode || !root.sourceNode.audio) {
+        root.helperError = "This headset has no microphone in its current mode"
+        return
+      }
+      root.sourceNode.audio.muted = !value
+      return
+    }
+    var profile = ""
+    if (feature === "codec") profile = String(value)
+    else if (value === "headset") profile = root.audioCard.headset_profile
+    else profile = root.audioCard.best_listening
+    if (profile === "") {
+      root.helperError = "This headset does not offer that mode"
+      return
+    }
+    root.switchProfile(profile)
+  }
+
   function apply(values) {
+    root.helperError = ""
+    var forHelper = {}
+    var any = false
+    for (var feature in values) {
+      if (root.universalFeatures.indexOf(feature) !== -1) {
+        root.applyUniversal(feature, values[feature])
+      } else {
+        forHelper[feature] = values[feature]
+        any = true
+      }
+    }
+    if (!any) return
     if (!root.live) {
       root.helperError = "The headset is not connected"
       return
     }
-    root.helperError = ""
-    root.send(Model.setCommand(values))
+    root.send(Model.setCommand(forHelper))
   }
 
   function cycleNoise(direction) {
@@ -255,6 +390,7 @@ Panel {
     if (root.flatRows.length > 0) root.cursorRow = root.flatRows[0]
     // Reopening a panel halfway down the last thing you read is disorienting.
     scroll.contentY = 0
+    root.refreshAudio()
     root.send("refresh")
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -281,6 +417,73 @@ Panel {
     }
   }
 
+  // The card reading. Short-lived and on demand: profiles change only when
+  // something switches them, and the codec in use comes from PipeWire live.
+  Process {
+    id: audioProcess
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var text = String(this.text || "").trim()
+        if (text.charAt(0) !== "{") return
+        // A reading belongs to the headset it was asked about. Swapping headsets
+        // mid-read otherwise shows one device's codecs under the other's name.
+        if (root.audioFor !== root.headsetAddress) return
+        try {
+          root.audioCard = JSON.parse(text)
+        } catch (error) {
+          root.helperError = "Could not read the audio profile"
+        }
+      }
+    }
+    stderr: SplitParser {
+      onRead: function(line) {
+        var text = String(line || "").trim()
+        if (text.length > 0) root.helperError = text.replace(/^headsetctl: /, "")
+      }
+    }
+    // A profile switch tears the link down and brings it back, so the reading
+    // that follows has to wait for PipeWire rather than race it. Only after a
+    // switch: re-reading after every read is a loop that never stops.
+    onExited: function(code) {
+      var wasSwitching = root.audioSwitching
+      root.audioSwitching = false
+      var queued = root.audioQueued
+      root.audioQueued = ""
+      if (queued !== "") {
+        root.switchProfile(queued)
+        return
+      }
+      if (wasSwitching) audioSettle.restart()
+    }
+  }
+
+  Timer {
+    id: audioSettle
+    interval: 900
+    onTriggered: root.refreshAudio()
+  }
+
+  function refreshAudio() {
+    if (root.headsetAddress === "") return
+    if (audioProcess.running) return
+    root.audioFor = root.headsetAddress
+    root.audioSwitching = false
+    audioProcess.command = [root.helperPath, "audio", "--address", root.headsetAddress]
+    audioProcess.running = true
+  }
+
+  function switchProfile(profile) {
+    if (root.headsetAddress === "" || profile === "") return
+    if (audioProcess.running) {
+      root.audioQueued = profile
+      return
+    }
+    root.audioFor = root.headsetAddress
+    root.audioSwitching = true
+    audioProcess.command = [root.helperPath, "audio", "--address", root.headsetAddress, profile]
+    audioProcess.running = true
+  }
+
   // Backoff, because a headset that will never answer should not cost a process
   // every two seconds for the rest of the session.
   Timer {
@@ -296,6 +499,10 @@ Panel {
   onHeadsetAddressChanged: {
     root.unsupported = false
     root.restartDelay = 1000
+    root.audioCard = ({ codecs: [], profiles: [], mode: "", active_codec: "",
+                        active_profile: "", headset_profile: "", best_listening: "",
+                        has_microphone: false, card: "" })
+    root.refreshAudio()
     root.payload = { connected: false, state: ({}), controls: ({}), support: ({}),
                      pending: [], ignored: [], error: "" }
   }
@@ -320,7 +527,7 @@ Panel {
     bar: root.bar
     text: "󰋎"
     labelVisible: false
-    dimmed: !root.live
+    dimmed: root.headset === null
     fixedWidth: root.compactBar || Model.barText(root.viewPayload) === ""
       ? Style.space(34) : Style.space(64)
     tooltipText: Model.tooltipText(root.viewPayload)
@@ -343,7 +550,7 @@ Panel {
         anchors.verticalCenter: parent.verticalCenter
         text: "󰋎"
         textFormat: Text.PlainText
-        color: root.live && Model.accented(root.viewPayload) ? appTheme.accent : appTheme.barForeground
+        color: Model.accented(root.viewPayload) ? appTheme.accent : appTheme.barForeground
         font.family: appTheme.fontFamily
         font.pixelSize: Style.bar.iconFont
         renderType: Text.NativeRendering
@@ -433,18 +640,28 @@ Panel {
             meta: Model.heroMeta(root.viewPayload)
             foreground: appTheme.foreground
             fontFamily: appTheme.fontFamily
-            iconOpacity: root.live ? 1 : 0.45
+            iconOpacity: root.headset !== null ? 1 : 0.45
             iconComponent: Component {
               Text {
                 text: "󰋎"
                 textFormat: Text.PlainText
-                color: root.live && Model.accented(root.viewPayload) ? appTheme.accent : appTheme.foreground
+                color: Model.accented(root.viewPayload) ? appTheme.accent : appTheme.foreground
                 font.family: appTheme.fontFamily
                 font.pixelSize: Style.font.display
               }
             }
-            trailingControl: Component {
+            trailingControl: root.viewPayload.controls
+              && root.viewPayload.controls.noise
+              && root.viewPayload.controls.noise.writable ? noiseSwitch : null
+          }
+
+          Component {
+            id: noiseSwitch
+            Item {
+              implicitWidth: heroSwitch.implicitWidth
+              implicitHeight: heroSwitch.implicitHeight
               ToggleSwitch {
+                id: heroSwitch
                 checked: root.reading.noise === "anc"
                 enabled: root.writable
                 opacity: root.writable ? 1 : 0.4
@@ -458,6 +675,16 @@ Panel {
                 }
               }
             }
+          }
+
+          Text {
+            visible: Model.probeNotice(root.viewPayload) !== ""
+            width: parent.width
+            text: Model.probeNotice(root.viewPayload)
+            textFormat: Text.PlainText
+            color: appTheme.dim
+            font.family: appTheme.fontFamily
+            font.pixelSize: Style.font.bodySmall
           }
 
           Text {
@@ -500,9 +727,7 @@ Panel {
                   spec: modelData
                   status: Model.rowState(modelData, root.viewPayload)
                   reading: root.reading
-                  options: modelData.id === "eq_preset"
-                    ? Model.presetOptions(root.viewPayload)
-                    : (modelData.options || [])
+                  options: Model.optionsFor(modelData, root.viewPayload)
                   theme: appTheme
                   bar: root.bar
                   host: root
@@ -517,7 +742,7 @@ Panel {
 
           Text {
             width: parent.width
-            text: "a noise · t ambient · j k rows · h l adjust · + − value · r refresh · Esc close"
+            text: Model.keyboardHint(root.viewPayload)
             textFormat: Text.PlainText
             color: appTheme.faint
             font.family: appTheme.fontFamily

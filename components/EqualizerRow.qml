@@ -24,7 +24,10 @@ Column {
 
   spacing: Style.space(6)
   enabled: !!status.writable
-  opacity: enabled ? 1 : 0.45
+
+  // Dim the control, never the words. WCAG 1.4.3 withdraws the contrast floor
+  // from an inactive component, so a blanket opacity lands hardest on the one
+  // piece of text the user most needs to read: the reason it is inactive.
 
   // Six sliders: clear bass first, then the five bands, which is the order the
   // headset itself reports them in.
@@ -110,6 +113,7 @@ Column {
   CursorSurface {
     width: parent.width
     height: Style.space(148)
+    opacity: root.enabled ? 1 : 0.45
     hasCursor: root.hasCursor
     foreground: root.theme ? root.theme.foreground : Color.foreground
     HoverHandler { onHoveredChanged: root.hovered(hovered) }
