@@ -1,15 +1,21 @@
 # Everything CI runs, in one command, before you push.
-.PHONY: check test test-python test-js manifest validate lint install uninstall reload clean
+.PHONY: check test test-python test-hostile test-js manifest validate lint install uninstall reload clean
 
 check: test lint manifest validate
 	@echo "all checks passed"
 
-test: test-python test-js
+test: test-python test-hostile test-js
 
 # No PATH: the helper shells out to bluetoothctl, and a test that quietly takes
 # a different branch when it is missing is a test that only passes here.
 test-python:
 	@env -u PATH $$(command -v python3) -m unittest discover -s tests -q
+
+# The same suite with Bluetooth, PipeWire, pactl and every subprocess taken
+# away. CI has broken twice on a test that quietly needed the machine it was
+# written on, and both times it passed here and failed there.
+test-hostile:
+	@python3 tools/hostile.py
 
 test-js:
 	@node --test "tests/js/*.test.mjs"

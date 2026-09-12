@@ -461,7 +461,10 @@ class MessageWidthTests(unittest.TestCase):
         with patch.object(own.equaliser, "available", return_value=False):
             own.apply({"eq_enabled": True})
         found += list(own.refused.values())
+        # start and settle are patched: this is about the words, and a unit test
+        # that spawns PipeWire passes or fails on what the machine has installed.
         with patch.object(own.equaliser, "available", return_value=True), \
+             patch.object(own.equaliser, "start"), patch.object(own.equaliser, "settle"), \
              patch.object(own, "sink_name", return_value="bluez_output.X.1"):
             own.apply({"eq_preset_host": "Nope"})
         found += list(own.refused.values())
@@ -534,6 +537,7 @@ class MessageWidthTests(unittest.TestCase):
         own.host_equaliser = True
         own.equaliser.gains = [4.0] * 10
         with patch.object(own.equaliser, "available", return_value=True), \
+             patch.object(own.equaliser, "start"), patch.object(own.equaliser, "settle"), \
              patch.object(own, "sink_name", return_value="bluez_output.X.1"):
             own.apply({"eq_preset_host": "Nonsense"})
         self.assertIn("eq_preset_host", own.refused)

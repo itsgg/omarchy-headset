@@ -232,7 +232,7 @@ bytes behind every decoder.
 
 ```sh
 make check       # everything CI runs: tests, lint, manifest, omarchy validate
-make test        # Python, and Model.js under node
+make test        # Python, the same suite with nothing installed, and Model.js
 make lint        # Qt 6 qmllint with Quickshell's import alias
 make reload      # install, clear the QML cache, restart the shell
 python3 tools/verify.py <address>   # write, reconnect, read back
@@ -246,6 +246,12 @@ so `make reload` clears it and restarts.
 
 The tests carry the bytes this headset actually sent, so a decoder that drifts
 from the hardware fails rather than quietly showing the wrong thing.
+
+`make test` runs the Python suite twice, the second time with Bluetooth,
+PipeWire, `pactl` and every subprocess taken away. CI has broken twice on a test
+that quietly needed the machine it was written on, once on `socket.AF_BLUETOOTH`
+and once on PipeWire's filter-chain config, and both times it passed here and
+failed there.
 
 `make lint` is in `make check` because it was not, and a widget that could not
 load at all once passed a green check: every Python and JavaScript test passes

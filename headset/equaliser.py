@@ -322,16 +322,24 @@ class Equaliser:
         folder = self.directory
         with contextlib.suppress(OSError):
             shutil.rmtree(folder)
-        (folder / "filter-chain.conf.d").mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(BASE_CONFIG, folder / "filter-chain.conf")
-        (folder / "filter-chain.conf.d" / "10-headset.conf").write_text(
-            fragment(self.name, self.address, sink, self.gains))
+        try:
+            (folder / "filter-chain.conf.d").mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(BASE_CONFIG, folder / "filter-chain.conf")
+            (folder / "filter-chain.conf.d" / "10-headset.conf").write_text(
+                fragment(self.name, self.address, sink, self.gains))
+        except OSError as error:
+            # `available` checked a moment ago, so this is the file going away
+            # underneath us, or a runtime directory that cannot be written.
+            raise HeadsetError(f"could not lay out the equaliser: {error}") from error
         environment = dict(os.environ, PIPEWIRE_CONFIG_DIR=str(folder))
         # Not in a new session: it belongs to this process and should not outlive
         # it any longer than it takes to notice.
-        self.process = subprocess.Popen(
-            ["pipewire", "-c", "filter-chain.conf"], env=environment,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            self.process = subprocess.Popen(
+                ["pipewire", "-c", "filter-chain.conf"], env=environment,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as error:
+            raise HeadsetError(f"could not start the equaliser: {error}") from error
         self._log(f"equaliser running as {self.sink_name}")
 
     def stop(self) -> None:
