@@ -13,7 +13,7 @@ from typing import Callable
 
 from . import framing, sdp
 from .drivers import spec
-from .errors import HeadsetError
+from .errors import HeadsetError, UnsupportedDevice
 from .session import ACKED, FAILED, REPLIED, SILENT, Session
 
 
@@ -70,15 +70,31 @@ class Device:
     def _handshake(self) -> None:
         """The init exchange decides the protocol generation before anything else."""
         answer: dict = {}
+        # Whether it answered at all is a different question from what the driver
+        # read out of the answer. A driver with no `identify` returns nothing and
+        # was being told its headset had not replied.
+        replied = False
 
         def done(status: str, payload: bytes | None) -> None:
-            if status == REPLIED and payload is not None and self.driver.identify:
+            nonlocal replied
+            if status != REPLIED:
+                return
+            replied = True
+            if payload is not None and self.driver.identify:
                 answer.update(self.driver.identify(payload))
 
         self.session.submit(self.driver.init, expect=0x01, on_done=done, label="init")
         self.session.run_until_idle(timeout=6.0)
-        if not answer:
+        if not replied:
             raise HeadsetError("the headset did not answer the control handshake")
+        protocol = answer.get("protocol")
+        if self.driver.protocols and protocol not in self.driver.protocols:
+            # Refused before anything is applied, so the panel is never briefly
+            # told about a headset that is about to be rejected.
+            raise UnsupportedDevice(
+                f"this headset speaks the older Sony protocol ({protocol}), which this "
+                "driver does not implement"
+            )
         self._apply(answer)
         self.ready = True
 

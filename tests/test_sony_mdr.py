@@ -234,6 +234,27 @@ class DriverTests(unittest.TestCase):
         self.assertFalse(sony.claims(""))
         self.assertFalse(sony.claims(None))
 
+    def test_the_older_over_ear_models_are_not_claimed(self):
+        # They speak protocol v1, which none of these records are written for.
+        # The letter is the whole difference: WF-1000XM4 is v2, WH-1000XM4 is not,
+        # so a looser match would claim a headset this cannot talk to.
+        for model in ("WH-1000XM4", "WH-1000XM3", "WH-1000XM2", "WF-SP800N", "WI-SP600N"):
+            self.assertFalse(sony.claims(model), model)
+        for model in ("WF-1000XM4", "WF-1000XM5", "WH-1000XM5", "WH-1000XM6",
+                      "WH-CH720N", "LinkBuds", "LinkBuds S"):
+            self.assertTrue(sony.claims(model), model)
+
+    def test_a_product_that_merely_contains_a_model_name_is_not_claimed(self):
+        # The LinkBuds Speaker is a speaker. Claiming it opens a control session
+        # against a device that has no such service.
+        self.assertFalse(sony.claims("LinkBuds Speaker"))
+        self.assertFalse(sony.claims("Sony LinkBuds Speaker"))
+        self.assertTrue(sony.claims("LinkBuds"))
+        self.assertTrue(sony.claims("LinkBuds S"))
+
+    def test_the_driver_says_which_protocol_its_records_are_written_for(self):
+        self.assertEqual(sony.DRIVER.protocols, ("v2",))
+
     def test_the_touch_panel_is_offered_read_only(self):
         # Verified by writing it and reading back from a fresh session: the headset
         # acknowledges the change and does not make it.

@@ -22,7 +22,7 @@ import time
 
 from . import drivers, ipc
 from .device import Device
-from .errors import HeadsetError
+from .errors import HeadsetError, UnsupportedDevice
 from .state import State
 
 BACKOFF_START = 2.0
@@ -173,6 +173,9 @@ class Owner:
         self.next_poll: dict[str, float] = {}
         self.stdout_open = True
         self.running = True
+        # Set when the headset is one this driver can never talk to. Retrying that
+        # every minute for the life of the session helps nobody.
+        self.hopeless = False
         # True while the opening read is still in flight. Publishing during it
         # shows a panel a device that is connected and has no settings yet.
         self.quiet = False
@@ -207,6 +210,7 @@ class Owner:
             "state": snapshot,
             "pending": self.state.unconfirmed(),
             "ignored": self.state.ignored(),
+            "unsupported": self.hopeless,
             "error": self.error,
         }
 
@@ -350,7 +354,11 @@ class Owner:
     def _timeout(self) -> float:
         waits = [IDLE_TICK]
         if self.device is None:
-            waits.append(max(0.05, self.next_attempt - time.monotonic()))
+            # Nothing to wake for when there will be no further attempt. Adding
+            # the "and not hopeless" to the condition alone dropped through to
+            # the branch below, which assumes a device.
+            if not self.hopeless:
+                waits.append(max(0.05, self.next_attempt - time.monotonic()))
         else:
             deadline = self.device.deadline()
             if deadline is not None:
@@ -381,9 +389,12 @@ class Owner:
                 signal.signal(number, self.stop)
         self.publish()
         while self.running:
-            if self.device is None and time.monotonic() >= self.next_attempt:
+            if self.device is None and not self.hopeless and time.monotonic() >= self.next_attempt:
                 try:
                     self.connect()
+                except UnsupportedDevice as error:
+                    self.hopeless = True
+                    self.drop(str(error))
                 except HeadsetError as error:
                     self.drop(str(error))
 

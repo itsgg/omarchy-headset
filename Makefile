@@ -28,10 +28,9 @@ lint:
 # A real directory, not a symlink: the shell's file watcher does not follow one,
 # so a symlinked plugin never hot-reloads and you debug yesterday's code.
 install:
-	@mkdir -p $(HOME)/.config/omarchy/plugins/gg.headset
-	@rsync -a --delete --exclude '.git' --exclude '__pycache__' \
-		--exclude 'tools/audit/shots' ./ $(HOME)/.config/omarchy/plugins/gg.headset/
-	@echo "installed; enable with: omarchy plugin enable gg.headset"
+	@mkdir -p $(HOME)/.config/omarchy/plugins/io.github.itsgg.headset
+	@rsync -a --delete --exclude '.git' --exclude '__pycache__' ./ $(HOME)/.config/omarchy/plugins/io.github.itsgg.headset/
+	@echo "installed; enable with: omarchy plugin enable io.github.itsgg.headset"
 
 # Quickshell caches compiled QML, and a changed file is not always enough to
 # invalidate it. Clearing the cache and restarting is the reliable loop.
@@ -44,7 +43,7 @@ reload: install
 	@echo "restarted; give the bar a few seconds"
 
 uninstall:
-	@rm -rf $(HOME)/.config/omarchy/plugins/gg.headset
+	@rm -rf $(HOME)/.config/omarchy/plugins/io.github.itsgg.headset
 	@echo "removed; state lives only in $${XDG_RUNTIME_DIR}/omarchy-headset and ~/.cache/omarchy-headset"
 
 clean:

@@ -77,6 +77,10 @@ class Driver:
     init: bytes
     records: tuple[Record, ...]
     controls: tuple[Control, ...] = ()
+    # Protocol generations this driver's records are written for. A headset that
+    # answers the handshake with a different one is refused outright rather than
+    # left with a panel that is empty for no stated reason.
+    protocols: tuple[str, ...] = ()
     claims: Callable[[str], bool] = field(default=lambda name: False)
     # Records to read once the init handshake is answered, in order.
     identify: Callable[[bytes], dict] | None = None

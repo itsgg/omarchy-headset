@@ -20,10 +20,29 @@ from .spec import COMMAND_1, COMMAND_2, Control, Driver, Record
 SERVICE_UUID = "956c7b26-d49a-4ba8-b03f-b17d393cb6e2"
 INIT = bytes((0x00, 0x00))
 
-# Model names this driver claims. Matching on a substring rather than an exact name
-# is deliberate: bluez reports "WH-1000XM5" but an alias may carry anything around it.
-MODELS = ("WH-1000XM5", "WH-1000XM6", "WF-1000XM5", "WH-1000XM4", "WF-1000XM4",
-          "WH-CH720N", "WF-C700N", "LinkBuds")
+# Model names this driver claims, and the evidence for each. Every record here is
+# written for protocol v2; a v1 headset answers almost none of them, so claiming
+# one would offer a panel that stays empty.
+#
+#   WH-1000XM5   verified on hardware here, firmware 2.5.1
+#   WF-1000XM4   v2 by its init reply in Gadgetbridge's own capture list
+#   WF-1000XM5   the same
+#   LinkBuds     the same, and LinkBuds S with it
+#   WH-1000XM6   v2 per gabamnml/omarchy-sony-headphones, which refuses it for that
+#   WH-CH720N    the same
+#
+# Deliberately absent: WH-1000XM4, WH-1000XM3 and WH-1000XM2 are v1, the XM4
+# verified on hardware by that same project. The letter matters: WF-1000XM4 is
+# v2 and WH-1000XM4 is not, so the names below must never be shortened.
+MODELS = ("WH-1000XM5", "WH-1000XM6", "WF-1000XM5", "WF-1000XM4",
+          "WH-CH720N", "LinkBuds")
+
+# Products whose names contain one of the above and are not headsets at all. The
+# LinkBuds Speaker is a speaker; claiming it would open a control session against
+# something that has no such service.
+NOT_MODELS = ("LINKBUDS SPEAKER",)
+
+PROTOCOLS = ("v2",)
 
 NOISE_OFF, NOISE_ANC, NOISE_AMBIENT = "off", "anc", "ambient"
 AMBIENT_MIN, AMBIENT_MAX = 0, 20
@@ -363,6 +382,8 @@ CONTROLS = (
 
 def claims(name: str) -> bool:
     text = str(name or "").upper().replace("_", "-")
+    if any(excluded in text for excluded in NOT_MODELS):
+        return False
     return any(model.upper() in text for model in MODELS)
 
 
@@ -373,6 +394,7 @@ DRIVER = Driver(
     init=INIT,
     records=RECORDS,
     controls=CONTROLS,
+    protocols=PROTOCOLS,
     claims=claims,
     identify=identify,
 )

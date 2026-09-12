@@ -18,7 +18,7 @@ import struct
 import uuid as uuidlib
 from pathlib import Path
 
-from .errors import HeadsetError
+from .errors import HeadsetError, UnsupportedDevice
 
 SDP_PSM = 1
 SERVICE_SEARCH_ATTRIBUTE_REQUEST = 0x06
@@ -161,7 +161,10 @@ def channel_for(address: str, service_uuid: str, use_cache: bool = True) -> int:
             return cached
     channels = rfcomm_channels(service_record(address, service_uuid))
     if not channels:
-        raise HeadsetError("the device does not advertise that control service")
+        # It answered the query and has no such service. A device whose services
+        # were merely not resolved yet fails the query itself, further up, and
+        # that stays worth retrying; this does not.
+        raise UnsupportedDevice("this device does not advertise a headset control service")
     channel = channels[0]
     if path is not None:
         _cache_write(path, service_uuid, channel)

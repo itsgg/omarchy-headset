@@ -57,17 +57,15 @@ class FakeDevice:
 
 
 def owner(state_values, support=None):
+    """A real Owner with a fake headset behind it.
+
+    Built through the constructor rather than assembled field by field: the
+    hand-built version silently went stale every time Owner gained a field, and
+    the tests then failed for a reason that had nothing to do with the tests.
+    """
     from headset.drivers import sony_mdr
-    made = server.Owner.__new__(server.Owner)
-    made.driver = sony_mdr.DRIVER
-    made.address = "AA:BB:CC:DD:EE:FF"
-    made.name = "WH-1000XM5"
-    made.clients = []
+    made = server.Owner("AA:BB:CC:DD:EE:FF", "WH-1000XM5", listener=None, stdin=None)
     made.stdout_open = False
-    made.quiet = True
-    made.error = ""
-    made.version = "test"
-    made.state = __import__("headset.state", fromlist=["State"]).State()
     made.state.observe(state_values)
     made.device = FakeDevice(support or {record.id: True for record in sony_mdr.DRIVER.records})
     return made
@@ -75,6 +73,28 @@ def owner(state_values, support=None):
 
 BASE = {"noise": "off", "ambient_level": 20, "focus_on_voice": False,
         "eq_bands": [0, 5, 7, 7, 9], "eq_clear_bass": -1, "speak_to_chat": False}
+
+
+class IdleTests(unittest.TestCase):
+    def test_an_owner_that_has_given_up_waits_rather_than_spinning(self):
+        # Once the retry deadline is in the past and will never be acted on, the
+        # loop woke every 50ms for the rest of the session.
+        import time
+
+        own = owner(BASE)
+        own.device = None
+        own.hopeless = True
+        own.next_attempt = time.monotonic() - 60
+        self.assertGreaterEqual(own._timeout(), server.IDLE_TICK)
+
+    def test_an_owner_still_trying_wakes_for_its_next_attempt(self):
+        import time
+
+        own = owner(BASE)
+        own.device = None
+        own.hopeless = False
+        own.next_attempt = time.monotonic() + 0.1
+        self.assertLess(own._timeout(), server.IDLE_TICK)
 
 
 class ApplyTests(unittest.TestCase):

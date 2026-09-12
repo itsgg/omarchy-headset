@@ -176,6 +176,6 @@ headsetctl devices
 headsetctl status --pretty
 headsetctl set noise ambient
 python3 tools/verify.py <address> [control ...]
-omarchy-shell gg.headset status
+omarchy-shell io.github.itsgg.headset status
 journalctl --user -u '*' | grep omarchy-headset
 ```

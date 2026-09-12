@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "gg.headset",
+  "id": "io.github.itsgg.headset",
   "name": "Headset",
   "version": "1.0.0",
   "author": "Ganesh Gunasegaran <me@itsgg.com>",

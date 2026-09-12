@@ -17,7 +17,7 @@ import "components"
 // Nothing here knows a Sony opcode. Adding a headset is a driver in the helper.
 Panel {
   id: root
-  moduleName: "gg.headset"
+  moduleName: "io.github.itsgg.headset"
   ipcTarget: ""
   manageIpc: false
 
@@ -301,7 +301,7 @@ Panel {
   }
 
   IpcHandler {
-    target: "gg.headset"
+    target: "io.github.itsgg.headset"
     function open(): void { root.open() }
     function close(): void { root.close() }
     function toggle(): void { root.toggle() }

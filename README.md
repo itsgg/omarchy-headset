@@ -17,10 +17,24 @@ reports. Adding a headset is a module, not a redesign.
 - Omarchy with its Quickshell bar, tested on **4.0.3-1**.
 - Python 3 and BlueZ, both already on the system. Standard library only: nothing
   to compile, nothing to pip install, no D-Bus bindings.
-- **Sony WH-1000XM5**, verified on firmware 2.5.1. The driver also claims the
-  XM4, XM6, WF-1000XM4/XM5, CH-720N, C700N and LinkBuds, which speak the same
-  protocol; those are unverified, and anything the headset does not answer for
-  simply does not appear in the panel.
+- Sony headsets speaking the **v2** MDR protocol. Every record here is written
+  for v2, so the list below is what the evidence supports and nothing more:
+
+| Model | Basis |
+| --- | --- |
+| **WH-1000XM5** | Verified on hardware, firmware 2.5.1. Every table in this README came off it. |
+| WF-1000XM4, WF-1000XM5, LinkBuds, LinkBuds S | v2 by their handshake replies in Gadgetbridge's captured list |
+| WH-1000XM6, WH-CH720N | v2 per `gabamnml/omarchy-sony-headphones`, which refuses them for that reason |
+
+The **WH-1000XM4, XM3 and XM2 are deliberately not claimed**: they speak the
+older v1 protocol, which this driver does not implement. The letter matters,
+because the WF-1000XM4 is v2 and the WH-1000XM4 is not. A headset that answers
+the handshake as v1 is told so plainly rather than being given a panel that
+stays empty for no stated reason.
+
+Everything but the XM5 is unverified by me. The panel is built from what the
+headset answers rather than from a table, so an unverified model shows the rows
+it actually supports and nothing it does not. Reports welcome either way.
 
 ## Install
 
@@ -50,10 +64,10 @@ it recognises is connected, and disappears when it is not.
 Bind the panel to a key:
 
 ```
-bindd = SUPER, H, Headset, exec, omarchy-shell gg.headset toggle
+bindd = SUPER, H, Headset, exec, omarchy-shell io.github.itsgg.headset toggle
 ```
 
-`omarchy-shell gg.headset` also takes `open`, `close`, `toggleNoise`,
+`omarchy-shell io.github.itsgg.headset` also takes `open`, `close`, `toggleNoise`,
 `cycleNoise`, `ambient`, `noise <off|ambient|anc>` and `status`.
 
 ## What this headset actually honours
@@ -79,7 +93,7 @@ differ, because the helper asks the headset rather than a table.
 
 ## Settings
 
-`omarchy bar set gg.headset`, or `barWidget.defaults` in `shell.json`:
+`omarchy bar set io.github.itsgg.headset`, or `barWidget.defaults` in `shell.json`:
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -165,8 +179,8 @@ from the hardware fails rather than quietly showing the wrong thing.
 ## Removing it
 
 ```sh
-omarchy plugin disable gg.headset   # keep it, take it off the bar
-omarchy plugin remove gg.headset
+omarchy plugin disable io.github.itsgg.headset   # keep it, take it off the bar
+omarchy plugin remove io.github.itsgg.headset
 ```
 
 It writes nothing outside `$XDG_RUNTIME_DIR/omarchy-headset`, which is tmpfs and
