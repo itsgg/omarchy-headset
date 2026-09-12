@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "gg.headset",
+  "name": "Headset",
+  "version": "1.0.0",
+  "author": "Ganesh Gunasegaran <me@itsgg.com>",
+  "license": "MIT",
+  "description": "Bluetooth headset controls in the bar: noise cancelling, equaliser, battery and behaviour, read from the device itself.",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Headset",
+    "description": "Noise control, equaliser, battery and settings for a connected Bluetooth headset. Sony WH-1000XM5 and relatives.",
+    "category": "Audio",
+    "aliases": ["headset", "headphones", "anc", "sony", "noise"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "sessionPolicy": "hold",
+      "idleSeconds": 30
+    },
+    "schema": [
+      {
+        "key": "sessionPolicy",
+        "type": "enum",
+        "label": "Control session",
+        "options": ["hold", "on-demand"],
+        "defaultValue": "hold",
+        "description": "A headset allows one control session at a time. Hold keeps it, so the bar always shows live settings. On-demand releases it shortly after the panel closes, so a phone can take it back."
+      },
+      {
+        "key": "idleSeconds",
+        "type": "integer",
+        "label": "Release the session after (seconds)",
+        "min": 5,
+        "max": 600,
+        "step": 5,
+        "defaultValue": 30,
+        "description": "Only used when the control session is set to on-demand."
+      }
+    ]
+  }
+}

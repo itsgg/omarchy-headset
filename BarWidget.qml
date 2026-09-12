@@ -1,0 +1,557 @@
+import QtQuick
+import QtQuick.Controls
+import Quickshell.Io
+import Quickshell.Bluetooth
+import qs.Commons
+import qs.Ui
+import "Model.js" as Model
+import "components"
+
+// A connected Bluetooth headset in the bar.
+//
+// Three parts, each with one job. bluez decides which headset exists and whether
+// it is connected, through Quickshell's own Bluetooth service. The `headsetctl`
+// helper owns the single control session the headset allows and streams its state
+// as JSON lines. This file draws whatever that state says the headset supports.
+//
+// Nothing here knows a Sony opcode. Adding a headset is a driver in the helper.
+Panel {
+  id: root
+  moduleName: "gg.headset"
+  ipcTarget: ""
+  manageIpc: false
+
+  // -------------------------------------------------------------- which headset
+  //
+  // bluez is already tracking every paired device, so asking it beats polling for
+  // a device that may not be there. It also knows the battery level over the
+  // standard profile, which is why the bar can show a percentage with no control
+  // session at all.
+  readonly property var bluetoothDevices: Bluetooth.devices ? Bluetooth.devices.values : []
+  readonly property var headset: {
+    var best = null
+    for (var i = 0; i < bluetoothDevices.length; i++) {
+      var device = bluetoothDevices[i]
+      if (!device || !device.connected) continue
+      var icon = String(device.icon || "")
+      // Device class, not a name match: every headset and pair of headphones
+      // reports one of these, and nothing else does.
+      if (icon !== "audio-headset" && icon !== "audio-headphones") continue
+      if (best === null) best = device
+    }
+    return best
+  }
+  readonly property string headsetAddress: headset ? String(headset.address || "") : ""
+  readonly property string headsetName: headset ? String(headset.deviceName || headset.name || "") : ""
+  readonly property int bluezBattery: headset && headset.batteryAvailable
+    ? Math.round(headset.battery * 100) : -1
+
+  // ------------------------------------------------------------------- helper IO
+  //
+  // resolvedUrl percent-encodes, so a plugin directory containing a space would
+  // otherwise yield a path that cannot be executed. Resolving from this file also
+  // means the widget survives being installed under a different id or cloned.
+  readonly property string helperPath:
+    decodeURIComponent(Qt.resolvedUrl("headsetctl").toString().replace(/^file:\/\//, ""))
+
+  property var payload: ({ connected: false, state: ({}), controls: ({}), support: ({}),
+                           pending: [], ignored: [], error: "" })
+  property bool unsupported: false
+  property string helperError: ""
+  property int restartDelay: 1000
+
+  // Named `reading`, not `state`: every Item already has a `state` property,
+  // and shadowing it is a clash that resolves to the wrong thing in silence.
+  readonly property var reading: payload.state || ({})
+  readonly property var sections: Model.visibleSections(root.viewPayload)
+  // One object for Model.js to read, so the bluez battery fallback is visible to
+  // the same functions that format the session's own reading.
+  readonly property var viewPayload: {
+    var merged = {}
+    for (var key in payload) merged[key] = payload[key]
+    merged.bluezBattery = root.bluezBattery
+    // The helper's own view of the device is gone while it is restarting, and
+    // bluez still knows the name, so the panel keeps saying whose headset it is
+    // instead of falling back to the word "Headset".
+    if (!merged.device || !merged.device.name) {
+      merged.device = { name: root.headsetName, address: root.headsetAddress }
+    }
+    return merged
+  }
+  readonly property bool live: !!payload.connected
+  readonly property bool writable: !!payload.write_ready
+
+  // The one line the panel has to say about itself. Two separate Texts each
+  // claiming the same string printed a dropped link twice, one above the other.
+  readonly property string notice: {
+    var reported = String(payload.error || "") || root.helperError
+    if (!root.live) return reported || "Waiting for the headset's control channel."
+    return reported
+  }
+
+  readonly property string settingSessionPolicy: setting("sessionPolicy", "hold")
+  readonly property int settingIdleSeconds: setting("idleSeconds", 30)
+
+  // ------------------------------------------------------------------- appearance
+  // Distinct id: a row component owns a `theme` property, so `theme: theme` in a
+  // delegate binds the property to itself and QML reports a loop.
+  Theme { id: appTheme; bar: root.bar }
+
+  visible: root.headset !== null && !root.unsupported
+  implicitWidth: visible ? button.implicitWidth : 0
+  implicitHeight: visible ? button.implicitHeight : 0
+
+  readonly property bool compactBar: !!(bar && bar.vertical)
+
+  // --------------------------------------------------------------------- commands
+
+  function send(line) {
+    if (!helper.running) {
+      root.helperError = "The headset helper is not running"
+      return
+    }
+    helper.write(line + "\n")
+  }
+
+  function apply(values) {
+    if (!root.live) {
+      root.helperError = "The headset is not connected"
+      return
+    }
+    root.helperError = ""
+    root.send(Model.setCommand(values))
+  }
+
+  function cycleNoise(direction) {
+    if (!root.live) return
+    root.apply({ noise: Model.nextNoiseMode(root.reading.noise, direction) })
+  }
+
+  function toggleNoise() {
+    if (!root.live) return
+    root.apply({ noise: root.reading.noise === "off" ? "anc" : "off" })
+  }
+
+  function toAmbient() {
+    if (!root.live) return
+    root.apply({ noise: root.reading.noise === "ambient" ? "off" : "ambient" })
+  }
+
+  function nudgeAmbient(steps) {
+    if (!root.live || root.reading.noise !== "ambient") return
+    var level = root.reading.ambient_level
+    if (level === undefined || level === null) level = 0
+    root.apply({ ambient_level: Math.max(0, Math.min(Model.AMBIENT_MAX, level + steps)) })
+  }
+
+  function consume(line) {
+    var text = String(line || "").trim()
+    if (text.length === 0 || text.charAt(0) !== "{") return
+    try {
+      var next = JSON.parse(text)
+    } catch (error) {
+      root.helperError = "The headset helper sent something unreadable"
+      return
+    }
+    if (next.unsupported) {
+      // No driver claims this device. Stop rather than reopening a session
+      // against a headset nobody can talk to.
+      root.unsupported = true
+      return
+    }
+    root.payload = next
+    root.restartDelay = 1000
+    if (next.connected) root.helperError = ""
+  }
+
+  // ------------------------------------------------------------------------ rows
+
+  property var rowItems: ({})
+  property string cursorRow: ""
+  property bool cursorActive: false
+
+  function registerRow(id, item) {
+    var next = root.rowItems
+    next[id] = item
+    root.rowItems = next
+  }
+
+  function unregisterRow(id) {
+    var next = root.rowItems
+    delete next[id]
+    root.rowItems = next
+  }
+
+  readonly property var flatRows: {
+    var out = []
+    for (var s = 0; s < root.sections.length; s++) {
+      var rows = root.sections[s].rows
+      for (var r = 0; r < rows.length; r++) out.push(rows[r].id)
+    }
+    return out
+  }
+
+  function currentRowItem() {
+    return root.rowItems[root.cursorRow] || null
+  }
+
+  // Wrapping, like every other Omarchy panel. A list you can only walk off the
+  // end of is worse than one that comes back round.
+  function moveCursor(delta) {
+    var rows = root.flatRows
+    if (rows.length === 0) return
+    var at = rows.indexOf(root.cursorRow)
+    if (at === -1) {
+      root.cursorRow = rows[delta > 0 ? 0 : rows.length - 1]
+      return
+    }
+    var next = (at + delta) % rows.length
+    if (next < 0) next += rows.length
+    root.cursorRow = rows[next]
+  }
+
+  function adjustCursor(direction) {
+    var item = root.currentRowItem()
+    if (item) item.step(direction)
+  }
+
+  function nudgeCursor(direction) {
+    var item = root.currentRowItem()
+    if (item) item.nudge(direction)
+  }
+
+  function activateCursor() {
+    var item = root.currentRowItem()
+    if (item) item.activate()
+  }
+
+  // Keep the cursor on screen. Without this, walking down the panel selects rows
+  // below the fold and every key then acts on something the user cannot see.
+  function ensureRowVisible(id) {
+    var item = root.rowItems[id]
+    if (!item || !scroll.visible || scroll.height <= 0) return
+    var top = item.mapToItem(column, 0, 0).y
+    var bottom = top + item.height
+    var margin = Style.space(12)
+    if (top - margin < scroll.contentY) {
+      scroll.contentY = Math.max(0, top - margin)
+    } else if (bottom + margin > scroll.contentY + scroll.height) {
+      var limit = Math.max(0, scroll.contentHeight - scroll.height)
+      scroll.contentY = Math.min(limit, bottom + margin - scroll.height)
+    }
+  }
+
+  onCursorRowChanged: if (root.cursorActive) Qt.callLater(function() { root.ensureRowVisible(root.cursorRow) })
+
+  function hoverRow(id, on) {
+    if (!on) return
+    root.cursorActive = true
+    root.cursorRow = id
+  }
+
+  onOpenedChanged: if (opened) {
+    root.helperError = ""
+    root.cursorActive = false
+    if (root.flatRows.length > 0) root.cursorRow = root.flatRows[0]
+    // Reopening a panel halfway down the last thing you read is disorienting.
+    scroll.contentY = 0
+    root.send("refresh")
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
+  // ----------------------------------------------------------------- the process
+
+  Process {
+    id: helper
+    command: [root.helperPath, "watch", "--address", root.headsetAddress, "--name", root.headsetName]
+    // Only while bluez says there is a headset to talk to. Spawning a helper for a
+    // device that is not there is what turns one absent headset into a respawn loop.
+    running: root.headsetAddress !== "" && !root.unsupported
+    stdinEnabled: true
+    stdout: SplitParser { onRead: function(line) { root.consume(line) } }
+    stderr: SplitParser {
+      onRead: function(line) {
+        var text = String(line || "").trim()
+        if (text.length > 0) root.helperError = text.replace(/^omarchy-headset: /, "")
+      }
+    }
+    onExited: function(code) {
+      root.payload = Object.assign({}, root.payload, { connected: false, write_ready: false })
+      if (!root.unsupported && root.headsetAddress !== "") restartTimer.restart()
+    }
+  }
+
+  // Backoff, because a headset that will never answer should not cost a process
+  // every two seconds for the rest of the session.
+  Timer {
+    id: restartTimer
+    interval: root.restartDelay
+    onTriggered: {
+      root.restartDelay = Math.min(60000, root.restartDelay * 2)
+      if (root.headsetAddress !== "" && !root.unsupported) helper.running = true
+    }
+  }
+
+  // A different headset connected: start again rather than talking to the old one.
+  onHeadsetAddressChanged: {
+    root.unsupported = false
+    root.restartDelay = 1000
+    root.payload = { connected: false, state: ({}), controls: ({}), support: ({}),
+                     pending: [], ignored: [], error: "" }
+  }
+
+  IpcHandler {
+    target: "gg.headset"
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function toggle(): void { root.toggle() }
+    function noise(mode: string): void { root.apply({ noise: mode }) }
+    function cycleNoise(): void { root.cycleNoise(1) }
+    function toggleNoise(): void { root.toggleNoise() }
+    function ambient(): void { root.toAmbient() }
+    function status(): string { return JSON.stringify(root.payload) }
+  }
+
+  // ------------------------------------------------------------------ bar button
+
+  WidgetButton {
+    id: button
+    anchors.fill: parent
+    bar: root.bar
+    text: "󰋎"
+    labelVisible: false
+    dimmed: !root.live
+    fixedWidth: root.compactBar || Model.barText(root.viewPayload) === ""
+      ? Style.space(34) : Style.space(64)
+    tooltipText: Model.tooltipText(root.viewPayload)
+    onPressed: function(code) {
+      if (code === Qt.MiddleButton) root.toggleNoise()
+      else if (code === Qt.RightButton) root.toAmbient()
+      else root.toggle()
+    }
+    onWheelMoved: function(delta) {
+      var wheel = Util.wheelSteps(root.wheelAccumulator, delta)
+      root.wheelAccumulator = wheel.remainder
+      if (wheel.steps !== 0) root.nudgeAmbient(wheel.steps)
+    }
+
+    Row {
+      anchors.centerIn: parent
+      spacing: Style.space(5)
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        text: "󰋎"
+        textFormat: Text.PlainText
+        color: root.live && Model.accented(root.viewPayload) ? appTheme.accent : appTheme.barForeground
+        font.family: appTheme.fontFamily
+        font.pixelSize: Style.bar.iconFont
+        renderType: Text.NativeRendering
+      }
+      Text {
+        visible: !root.compactBar && text !== ""
+        anchors.verticalCenter: parent.verticalCenter
+        text: Model.barText(root.viewPayload)
+        textFormat: Text.PlainText
+        color: appTheme.barForeground
+        font.family: appTheme.fontFamily
+        font.pixelSize: Style.font.bodySmall
+      }
+    }
+  }
+
+  property real wheelAccumulator: 0
+
+  // ----------------------------------------------------------------------- panel
+
+  KeyboardPanel {
+    id: panel
+    anchorItem: button
+    owner: root
+    bar: root.bar
+    open: root.opened
+    focusTarget: keyCatcher
+    contentWidth: panel.fittedContentWidth(Style.space(400))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(900))
+
+    PanelKeyCatcher {
+      id: keyCatcher
+      anchors.fill: parent
+      blocked: powerConfirm.opened
+      onCloseRequested: root.close()
+      onTabRequested: function(direction) { root.switchPanel(direction) }
+      onMoveRequested: function(dx, dy) {
+        if (!root.cursorActive) { root.cursorActive = true; return }
+        if (dy !== 0) root.moveCursor(dy)
+        else if (dx !== 0) root.adjustCursor(dx)
+      }
+      onActivateRequested: if (root.cursorActive) root.activateCursor()
+      onTextKey: function(text) {
+        if (text === "a" || text === "A") root.toggleNoise()
+        else if (text === "t" || text === "T") root.toAmbient()
+        else if (text === "r" || text === "R") root.send("refresh")
+        else if (text === "+" || text === "=") root.nudgeCursor(1)
+        else if (text === "-" || text === "_") root.nudgeCursor(-1)
+      }
+
+      Flickable {
+        id: scroll
+        anchors.fill: parent
+        readonly property int gutter: Style.space(10)
+        contentWidth: width
+        contentHeight: column.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+        interactive: contentHeight > height
+        // The default style fades its handle out whenever nothing is interacting
+        // with it, so AlwaysOn alone left an empty gutter and a panel that looked
+        // as though it simply ended. This one is always drawn and themed.
+        ScrollBar.vertical: ScrollBar {
+          id: verticalBar
+          policy: scroll.contentHeight > scroll.height ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+          active: true
+          width: Style.space(8)
+          background: Item {}
+          contentItem: Rectangle {
+            implicitWidth: Style.space(4)
+            radius: width / 2
+            color: Qt.rgba(appTheme.foreground.r, appTheme.foreground.g, appTheme.foreground.b,
+                           verticalBar.pressed ? 0.5 : 0.25)
+            Behavior on color { ColorAnimation { duration: 120 } }
+          }
+        }
+
+        Column {
+          id: column
+          width: scroll.width - scroll.gutter
+          spacing: Style.space(12)
+
+          PanelHero {
+            width: parent.width
+            title: Model.deviceName(root.viewPayload)
+            meta: Model.heroMeta(root.viewPayload)
+            foreground: appTheme.foreground
+            fontFamily: appTheme.fontFamily
+            iconOpacity: root.live ? 1 : 0.45
+            iconComponent: Component {
+              Text {
+                text: "󰋎"
+                textFormat: Text.PlainText
+                color: root.live && Model.accented(root.viewPayload) ? appTheme.accent : appTheme.foreground
+                font.family: appTheme.fontFamily
+                font.pixelSize: Style.font.display
+              }
+            }
+            trailingControl: Component {
+              ToggleSwitch {
+                checked: root.reading.noise === "anc"
+                enabled: root.writable
+                opacity: root.writable ? 1 : 0.4
+                foreground: appTheme.foreground
+                onToggled: root.toggleNoise()
+                PanelToolTip {
+                  visible: parent.containsMouse
+                  text: root.reading.noise === "anc"
+                    ? "Switch noise cancelling off" : "Switch noise cancelling on"
+                  fontFamily: appTheme.fontFamily
+                }
+              }
+            }
+          }
+
+          Text {
+            visible: root.notice !== ""
+            width: parent.width
+            text: root.notice
+            textFormat: Text.PlainText
+            // Not connected is an explanation; a problem while connected is a
+            // problem, and they should not look the same.
+            color: root.live ? appTheme.urgent : appTheme.dim
+            font.family: appTheme.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.WordWrap
+          }
+
+          // Every section the headset actually reported features for.
+          Repeater {
+            model: root.sections
+
+            Column {
+              id: sectionColumn
+              required property var modelData
+              width: column.width
+              spacing: Style.space(8)
+
+              PanelSeparator { foreground: appTheme.foreground }
+
+              PanelSectionHeader {
+                text: sectionColumn.modelData.title
+                foreground: appTheme.foreground
+                fontFamily: appTheme.fontFamily
+              }
+
+              Repeater {
+                model: sectionColumn.modelData.rows
+
+                FeatureRow {
+                  required property var modelData
+                  width: sectionColumn.width
+                  spec: modelData
+                  status: Model.rowState(modelData, root.viewPayload)
+                  reading: root.reading
+                  options: modelData.id === "eq_preset"
+                    ? Model.presetOptions(root.viewPayload)
+                    : (modelData.options || [])
+                  theme: appTheme
+                  bar: root.bar
+                  host: root
+                  hasCursor: root.cursorActive && root.cursorRow === String(modelData.id)
+                  onRequested: function(values) { root.apply(values) }
+                  onHovered: function(on) { root.hoverRow(String(modelData.id), on) }
+                  onConfirmRequested: function(message) { powerConfirm.opened = true }
+                }
+              }
+            }
+          }
+
+          Text {
+            width: parent.width
+            text: "a noise · t ambient · j k rows · h l adjust · + − value · r refresh · Esc close"
+            textFormat: Text.PlainText
+            color: appTheme.faint
+            font.family: appTheme.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
+          }
+        }
+      }
+    }
+
+    // The key catcher stops listening while this is up, so the dialog has to
+    // take the keyboard itself. Without that, a confirmation reached with the
+    // keyboard could only be answered with the mouse.
+    ConfirmDialog {
+      id: powerConfirm
+      anchors.fill: parent
+      focus: powerConfirm.opened
+      Keys.onPressed: function(event) { event.accepted = powerConfirm.handleKey(event) }
+      onOpenedChanged: {
+        if (powerConfirm.opened) powerConfirm.forceActiveFocus()
+        else Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+      }
+      message: "Turn the headset off?"
+      confirmText: "Turn off"
+      cancelText: "Keep on"
+      foreground: appTheme.foreground
+      fontFamily: appTheme.fontFamily
+      onConfirmed: {
+        powerConfirm.opened = false
+        root.apply({ power_off: true })
+        root.close()
+      }
+      onCanceled: powerConfirm.opened = false
+    }
+  }
+}

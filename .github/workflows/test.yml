@@ -1,0 +1,43 @@
+name: test
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Unit tests
+        # No PATH: the helper shells out to bluetoothctl, and a test that
+        # quietly takes a different branch when it is missing is a test that
+        # only passes on the author's machine.
+        run: env -u PATH $(which python3) -m unittest discover -s tests -v
+
+  javascript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Model.js tests
+        run: node --test "tests/js/*.test.mjs"
+
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Manifest matches what Omarchy and the marketplace require
+        run: python3 tools/check_manifest.py
