@@ -1,7 +1,7 @@
 # Everything CI runs, in one command, before you push.
 .PHONY: check test test-python test-js manifest validate lint install uninstall reload clean
 
-check: test manifest validate
+check: test lint manifest validate
 	@echo "all checks passed"
 
 test: test-python test-js
@@ -22,6 +22,9 @@ manifest:
 validate:
 	@omarchy plugin validate . && echo "omarchy validate: ok"
 
+# In `check` because it was not, and a widget that could not load at all passed
+# a green `make check`: every Python and JavaScript test passes on QML that the
+# shell refuses.
 lint:
 	@tools/qmllint.sh
 
