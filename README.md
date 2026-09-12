@@ -76,6 +76,11 @@ replaced, and everything it creates is gone at logout however it shut down.
 - Omarchy with its Quickshell bar, tested on **4.0.3-1**.
 - Python 3 and BlueZ, both already on the system. Standard library only: nothing
   to compile, nothing to pip install, no D-Bus bindings.
+- PipeWire, for the codec and profile rows and for the equaliser this machine
+  runs. The equaliser also needs PipeWire's filter-chain module, which is part
+  of the stock `pipewire` package on Arch and is at
+  `/usr/share/pipewire/filter-chain.conf`. Where it is missing the equaliser is
+  not offered, and nothing else changes.
 - **Any** Bluetooth headset, for the first tier. Battery needs the headset to
   report it over the hands-free profile, which most do and the cheapest do not.
 - Sony headsets speaking the **v2** MDR protocol, for the driver tier. Every
