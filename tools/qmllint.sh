@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Qt 6's qmllint over the plugin, with Quickshell's `qs` import alias in place.
 #
 # /usr/bin/qmllint may belong to Qt 5 on some systems, so the Qt 6 one is named

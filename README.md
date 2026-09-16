@@ -45,7 +45,10 @@ configuration is read or written.
 
 - Omarchy with its Quickshell bar, tested on **4.0.3-1**.
 - Python 3 and BlueZ. Standard library only: nothing to compile, no packages to
-  add, no D-Bus bindings.
+  add, no D-Bus bindings. The helper runs `/usr/bin/python3`, and finds `pactl`,
+  `pipewire` and `bluetoothctl` under `/usr/bin` rather than on `PATH`: the bar
+  starts it with nobody watching, so what it runs is not left to whatever the
+  shell happened to be started with.
 - PipeWire, for the codec and profile rows. The equaliser additionally needs its
   filter-chain module at `/usr/share/pipewire/filter-chain.conf`, part of the
   stock `pipewire` package on Arch. Without it the equaliser is not offered.

@@ -14,7 +14,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from headset import audio  # noqa: E402
+from headset import audio, binaries  # noqa: E402
 from headset.errors import HeadsetError  # noqa: E402
 
 CARDS = (ROOT / "tests" / "fixtures" / "pactl-cards.txt").read_text()
@@ -104,7 +104,10 @@ class LocaleTests(unittest.TestCase):
             seen.update(kwargs.get("env") or {})
             return Done()
 
-        with patch("subprocess.run", side_effect=record):
+        # The lookup is stood in for because this runs where there may be no
+        # pactl to find; what it is run with is tested in tests/test_binaries.py.
+        with patch.object(binaries, "find", return_value="/usr/bin/pactl"), \
+             patch("subprocess.run", side_effect=record):
             audio.run_pactl(["list", "cards"])
         self.assertEqual(seen.get("LC_ALL"), "C")
         self.assertEqual(seen.get("LANG"), "C")
@@ -146,7 +149,8 @@ class SwitchTests(unittest.TestCase):
                 audio.set_profile(card, profile)
 
     def test_a_missing_pactl_is_reported_rather_than_crashing(self):
-        with patch("subprocess.run", side_effect=FileNotFoundError()):
+        with patch.object(binaries, "find", return_value="/usr/bin/pactl"), \
+             patch("subprocess.run", side_effect=FileNotFoundError()):
             with self.assertRaises(HeadsetError):
                 audio.run_pactl(["list", "cards"])
 
@@ -187,7 +191,8 @@ class SwitchTests(unittest.TestCase):
             stdout = ""
             stderr = "Failure: No such entity\nmore noise\n"
 
-        with patch("subprocess.run", return_value=Done()):
+        with patch.object(binaries, "find", return_value="/usr/bin/pactl"), \
+             patch("subprocess.run", return_value=Done()):
             with self.assertRaises(HeadsetError) as caught:
                 audio.run_pactl(["set-card-profile", "x", "y"])
         self.assertEqual(str(caught.exception), "Failure: No such entity")

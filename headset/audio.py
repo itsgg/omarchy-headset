@@ -11,11 +11,11 @@ live on the card, so the listing and the switch go through `pactl`.
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import time
 
+from . import binaries
 from .errors import HeadsetError
 
 # "a2dp-sink-sbc: High Fidelity Playback (A2DP Sink, codec SBC) (sinks: 1, ...)"
@@ -94,12 +94,43 @@ def parse_cards(text: str) -> list[dict]:
 
 
 def run_pactl(arguments: list[str]) -> str:
+    program = binaries.find("pactl")
+    if program is None:
+        raise HeadsetError("pactl is not installed, so the audio profile cannot be read")
     # In the C locale, because every heading and field name below is matched in
     # English. Under a translated locale the parser finds no card at all and the
-    # audio rows vanish from a headset that has them.
-    environment = dict(os.environ, LC_ALL="C", LANG="C", LANGUAGE="")
+    # audio rows vanish from a headset that has them. Said outright rather than
+    # left to an environment that happens to carry no locale: this parser depends
+    # on it, and depending on it by accident is how it comes back.
+    #
+    # `LANGUAGE` used to be emptied here, because gettext lets it override
+    # `LC_ALL` for messages. It is not emptied now, it is simply never passed.
+    #
+    # `XDG_RUNTIME_DIR` is how pactl finds the server's socket, and `HOME` is
+    # where it looks for the cookie if it is ever talking to a PulseAudio that
+    # wants one rather than to PipeWire. `PULSE_SERVER` and `PULSE_COOKIE` are
+    # how somebody points a client at a server that is not the local one; they
+    # were inherited before this, and a machine set up that way should not lose
+    # its audio rows to a change about something else.
+    #
+    # `PULSE_CLIENTCONFIG` is deliberately not among them, though it is the
+    # third variable in the same family. It names the client.conf to read, and a
+    # client.conf carries `autospawn` and `daemon-binary`, so honouring it would
+    # let one variable name a program for libpulse to run. That is the hole this
+    # module is here to close, arriving by the other door.
+    #
+    # `~/.config/pulse/client.conf` carries those same two keys and is still
+    # read. Dropping `HOME` does not stop that and was measured not to: with
+    # `HOME` unset entirely, pactl read the file anyway, because libpulse falls
+    # back to the passwd entry to find the home directory. So dropping it would
+    # cost the cookie and close nothing. What is left is a file in the user's
+    # own home, which is not a door this plugin can lock: anything that can
+    # write there can write a shell profile instead.
+    environment = binaries.environment(("XDG_RUNTIME_DIR", "HOME",
+                                        "PULSE_SERVER", "PULSE_COOKIE"),
+                                       LC_ALL="C", LANG="C")
     try:
-        done = subprocess.run(["pactl", *arguments], capture_output=True, text=True,
+        done = subprocess.run([program, *arguments], capture_output=True, text=True,
                               timeout=10, env=environment)
     except FileNotFoundError as error:
         raise HeadsetError("pactl is not installed, so the audio profile cannot be read") from error

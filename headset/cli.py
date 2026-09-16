@@ -17,7 +17,7 @@ import re
 import subprocess
 import sys
 
-from . import audio, client, drivers, server
+from . import audio, binaries, client, drivers, server
 from .device import Device
 from .errors import HeadsetError
 
@@ -28,9 +28,16 @@ def connected_devices() -> list[dict]:
     The panel does not use this: Quickshell already knows every bluez device and
     hands the helper an address. It exists so the CLI can be used without one.
     """
+    program = binaries.find("bluetoothctl")
+    if program is None:
+        raise HeadsetError("bluetoothctl is not installed, so bluez cannot be asked "
+                           "which devices are connected")
     try:
-        listing = subprocess.run(["bluetoothctl", "devices", "Connected"],
-                                 capture_output=True, text=True, timeout=10)
+        # bluez answers on the system bus, at a socket path of its own, so this
+        # one needs nothing carried over from here at all.
+        listing = subprocess.run([program, "devices", "Connected"],
+                                 capture_output=True, text=True, timeout=10,
+                                 env=binaries.environment())
     except (OSError, subprocess.SubprocessError) as error:
         raise HeadsetError(f"could not ask bluez which devices are connected: {error}") from error
     # A driver is now found for anything, because the fallback is identified by a

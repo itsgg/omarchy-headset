@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Take the README's screenshots off the running shell.
 
 The panel is drawn inside a full-screen layer surface, so Hyprland has no

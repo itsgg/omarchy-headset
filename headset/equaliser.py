@@ -26,6 +26,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from . import binaries
 from .errors import HeadsetError
 
 # The ten the ear expects to see, an octave apart.
@@ -310,7 +311,7 @@ class Equaliser:
             self.on_log(text)
 
     def available(self) -> bool:
-        return Path(BASE_CONFIG).is_file() and shutil.which("pipewire") is not None
+        return Path(BASE_CONFIG).is_file() and binaries.find("pipewire") is not None
 
     def start(self, sink: str) -> None:
         """Run the chain, replacing any chain already running for this headset."""
@@ -331,12 +332,29 @@ class Equaliser:
             # `available` checked a moment ago, so this is the file going away
             # underneath us, or a runtime directory that cannot be written.
             raise HeadsetError(f"could not lay out the equaliser: {error}") from error
-        environment = dict(os.environ, PIPEWIRE_CONFIG_DIR=str(folder))
+        program = binaries.find("pipewire")
+        if program is None:
+            # `available` said otherwise a moment ago, so the binary went away or
+            # its directory stopped being root's between then and now.
+            raise HeadsetError("no trusted pipewire to run the equaliser with")
+        # Built from nothing rather than copied from here. A filter chain is
+        # PipeWire loading modules and SPA plugins, and which ones it loads is
+        # `PIPEWIRE_MODULE_DIR` and `SPA_PLUGIN_DIR`'s to say: inheriting them
+        # would let whatever started the bar choose the code running inside the
+        # process this plugin puts the user's audio through.
+        #
+        # What is passed is how the chain reaches the server it is joining, and
+        # nothing about what it loads once it is there: `XDG_RUNTIME_DIR` and
+        # `PIPEWIRE_RUNTIME_DIR` are where the socket lives, `PIPEWIRE_REMOTE` is
+        # its name, and the config directory is the private one laid out above.
+        environment = binaries.environment(("XDG_RUNTIME_DIR", "PIPEWIRE_RUNTIME_DIR",
+                                            "PIPEWIRE_REMOTE", "HOME"),
+                                           PIPEWIRE_CONFIG_DIR=str(folder))
         # Not in a new session: it belongs to this process and should not outlive
         # it any longer than it takes to notice.
         try:
             self.process = subprocess.Popen(
-                ["pipewire", "-c", "filter-chain.conf"], env=environment,
+                [program, "-c", "filter-chain.conf"], env=environment,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError as error:
             raise HeadsetError(f"could not start the equaliser: {error}") from error
