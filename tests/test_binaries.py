@@ -9,7 +9,9 @@ sites is checked for the argument vector and the environment it actually builds
 rather than for calling something named correctly.
 """
 import ast
+import importlib.util
 import os
+import socket
 import sys
 import tempfile
 import unittest
@@ -153,8 +155,13 @@ class CallSiteTests(unittest.TestCase):
     shows up as a call site with no test beside it rather than as a failure.
     """
 
-    def run_and_capture(self, call, program: str) -> dict:
-        """Run `call` with `program` resolved and nothing executed, and report the call."""
+    def run_and_capture(self, call, program: str, environment: dict | None = None) -> dict:
+        """Run `call` with `program` resolved and nothing executed, and report the call.
+
+        `environment` is laid over the hostile one above; a value of None there
+        means the variable is unset for the length of the call, which is how a
+        test says "this machine has no PULSE_SERVER".
+        """
         seen = {}
 
         class Done:
@@ -167,9 +174,15 @@ class CallSiteTests(unittest.TestCase):
             seen["env"] = kwargs.get("env")
             return Done()
 
+        merged = dict(HOSTILE, **(environment or {}))
+        unset = [name for name, value in merged.items() if value is None]
+        for name in unset:
+            merged.pop(name)
         with patch.object(binaries, "find", return_value=f"/usr/bin/{program}"), \
-             patch.dict(os.environ, HOSTILE, clear=False), \
+             patch.dict(os.environ, merged, clear=False), \
              patch("subprocess.run", side_effect=record):
+            for name in unset:
+                os.environ.pop(name, None)
             call()
         return seen
 
@@ -185,6 +198,72 @@ class CallSiteTests(unittest.TestCase):
         # Still in English, which is the other thing this environment is for.
         self.assertEqual(seen["env"]["LC_ALL"], "C")
         self.assertEqual(seen["env"]["LANG"], "C")
+
+    def test_pactl_is_told_which_server_to_use_so_it_cannot_autospawn(self):
+        # Naming the server is what turns autospawn off, which is the last way a
+        # configuration file could name a program for libpulse to run. Measured
+        # against a real pactl: with `autospawn = yes` and a `daemon-binary` in
+        # a client.conf, an unreachable server ran that binary without this
+        # argument and did not run it with it.
+        folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (folder / "pulse").mkdir()
+        sock = socket.socket(socket.AF_UNIX)
+        self.addCleanup(sock.close)
+        sock.bind(str(folder / "pulse" / "native"))
+        seen = self.run_and_capture(lambda: audio.run_pactl(["list", "cards"]), "pactl",
+                                    {"XDG_RUNTIME_DIR": str(folder), "PULSE_SERVER": None})
+        self.assertIn("--server", seen["argv"])
+        self.assertEqual(seen["argv"][seen["argv"].index("--server") + 1].split()[0],
+                         f"unix:{folder / 'pulse' / 'native'}")
+
+    def test_a_server_the_user_named_is_the_one_pactl_is_given(self):
+        seen = self.run_and_capture(lambda: audio.run_pactl(["list", "cards"]), "pactl",
+                                    {"PULSE_SERVER": "tcp:box:4713"})
+        self.assertEqual(seen["argv"][seen["argv"].index("--server") + 1], "tcp:box:4713")
+
+    def test_a_server_is_named_even_when_the_socket_is_not_there(self):
+        # The missing socket is the case that matters: a connection that fails is
+        # what autospawn is for, so leaving the server unnamed there would put
+        # the hole back exactly where it bites. Measured against a real pactl
+        # before this was changed, and it did run the daemon-binary.
+        folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        seen = self.run_and_capture(lambda: audio.run_pactl(["list", "cards"]), "pactl",
+                                    {"XDG_RUNTIME_DIR": str(folder), "PULSE_SERVER": None})
+        self.assertEqual(seen["argv"][seen["argv"].index("--server") + 1].split()[0],
+                         f"unix:{folder / 'pulse' / 'native'}")
+
+    def test_with_nothing_to_name_pactl_is_not_run_at_all(self):
+        # Not run, rather than run and failing. A HeadsetError alone proves
+        # nothing here: a pactl that ran without --server and could not connect
+        # raises the same thing, and that is the run this refuses to make.
+        with patch.object(binaries, "find", return_value="/usr/bin/pactl"), \
+             patch.dict(os.environ, {}, clear=True), \
+             patch("subprocess.run") as ran:
+            with self.assertRaises(HeadsetError):
+                audio.run_pactl(["list", "cards"])
+        ran.assert_not_called()
+
+    def test_a_runtime_directory_with_a_space_is_refused_rather_than_split(self):
+        # The argument is a whitespace-separated list with no quoting, so a
+        # crafted runtime directory is a second server address rather than a
+        # path. Confirmed against a real pactl: given two addresses it fails
+        # over from the first to the second and connects.
+        with patch.object(binaries, "find", return_value="/usr/bin/pactl"), \
+             patch.dict(os.environ, {"XDG_RUNTIME_DIR": "/tmp/x tcp:10.0.0.1"}, clear=True), \
+             patch("subprocess.run") as ran:
+            with self.assertRaises(HeadsetError):
+                audio.run_pactl(["list", "cards"])
+        ran.assert_not_called()
+
+    def test_the_system_wide_socket_is_still_offered_after_the_user_one(self):
+        # libpulse tries the per-user socket and then the system-wide one, so a
+        # machine running PulseAudio in system mode keeps working.
+        folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        seen = self.run_and_capture(lambda: audio.run_pactl(["list", "cards"]), "pactl",
+                                    {"XDG_RUNTIME_DIR": str(folder), "PULSE_SERVER": None})
+        named = seen["argv"][seen["argv"].index("--server") + 1].split()
+        self.assertEqual(named, [f"unix:{folder / 'pulse' / 'native'}",
+                                 f"unix:{audio.SYSTEM_SOCKET}"])
 
     def test_a_pactl_that_is_not_under_usr_bin_is_a_message_and_not_a_fallback(self):
         with patch.object(binaries, "find", return_value=None):
@@ -240,15 +319,21 @@ class CallSiteTests(unittest.TestCase):
         named as a literal, and a call with no environment of its own or one
         built out of this process's.
 
-        What it does not cover: `tools/`, which a person runs from their own
-        terminal against their own PATH and which needs Pillow and a running
-        desktop to do anything at all; and any spelling of a subprocess call
-        that reaches it through an alias or an indirection. It is a net for the
-        obvious way of reintroducing this, not a proof that nobody can.
+        It also covers the shipped scripts under `tools/` that carry the
+        executable bit. Those are run by hand rather than by the bar, so they are
+        not the boundary this module defends, but the marketplace baseline treats
+        executable files as scanned source wherever they sit, and one rule about
+        starting a program is easier to keep than two.
+
+        What it does not cover: a subprocess call that reaches the interpreter
+        through an alias or an indirection. It is a net for the obvious way of
+        reintroducing this, not a proof that nobody can.
         """
         starters = {"run", "Popen", "call", "check_call", "check_output"}
+        shipped = [path for path in sorted((ROOT / "tools").glob("*.py"))
+                   if os.access(path, os.X_OK)]
         offenders = []
-        for source in sorted((ROOT / "headset").rglob("*.py")):
+        for source in sorted((ROOT / "headset").rglob("*.py")) + shipped:
             for node in ast.walk(ast.parse(source.read_text())):
                 if not isinstance(node, ast.Call):
                     continue
@@ -278,6 +363,138 @@ class CallSiteTests(unittest.TestCase):
                          for inner in ast.walk(value)):
                     offenders.append(f"{where} builds its environment out of this one")
         self.assertEqual(offenders, [])
+
+
+def load_shots():
+    """tools/shots.py as a module, the way tests/test_shots.py loads it.
+
+    By path rather than by import, because `tools` is not a package, and behind
+    the same Pillow guard: the screenshot tool needs Pillow and a runner that
+    takes screenshots does not exist, so importing it unguarded is a test that
+    only passes on the machine it was written on.
+    """
+    spec = importlib.util.spec_from_file_location("shots", ROOT / "tools" / "shots.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@unittest.skipIf(importlib.util.find_spec("PIL") is None,
+                 "Pillow is only needed to take screenshots")
+class ShippedToolTests(unittest.TestCase):
+    """The scripts that ship with the executable bit, checked by behaviour.
+
+    The tree-parsing guard above cannot see these protections: a `program()`
+    that returned its argument would satisfy it, and a shell script has no AST
+    it reads. So each one is exercised.
+
+    The two that load the screenshot tool are skipped where Pillow is absent.
+    The linter's two below are not: they read a file and need nothing.
+    """
+
+    def test_the_screenshot_tool_resolves_its_programs_under_usr_bin(self):
+        shots = load_shots()
+        with patch.object(binaries, "find", return_value="/usr/bin/grim"):
+            self.assertEqual(shots.program("grim"), "/usr/bin/grim")
+        # And a name with no trusted program behind it stops the run rather than
+        # falling back to whatever PATH would have answered with.
+        with patch.object(binaries, "find", return_value=None):
+            with self.assertRaises(SystemExit):
+                shots.program("grim")
+
+    def test_the_screenshot_tool_does_not_photograph_a_panel_it_failed_to_open(self):
+        shots = load_shots()
+
+        class Done:
+            returncode = 1
+            stdout = ""
+            stderr = "OMARCHY_PATH is not set\n"
+
+        with patch.object(binaries, "find", return_value="/usr/bin/omarchy-shell"), \
+             patch("subprocess.run", return_value=Done()):
+            with self.assertRaises(SystemExit):
+                shots.shell("omarchy-shell", "plugin", "open")
+
+
+class ServerTests(unittest.TestCase):
+    """Which server pactl is pointed at, and how the path to it is built."""
+
+    def test_a_long_alias_to_the_runtime_directory_is_shortened(self):
+        # libpulse shortens this before building a socket address, because the
+        # address holds about 108 bytes. Passing the alias through unshortened
+        # is a connection that fails where libpulse's own lookup succeeds.
+        #
+        # Through `pulse_server` rather than through `shortest` on its own: a
+        # test that calls the helper directly stays green when the call to it is
+        # deleted, which is the only way this gets lost.
+        folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (folder / "run" / "user" / "1000" / "pulse").mkdir(parents=True)
+        (folder / "x").mkdir()
+        alias = f"{folder}" + "/x/.." * 20 + "/run/user/1000"
+        with patch.dict(os.environ, {"XDG_RUNTIME_DIR": alias}, clear=True):
+            named = audio.pulse_server().split()
+        self.assertEqual(named[0], f"unix:{folder}/run/user/1000/pulse/native")
+
+    def test_a_path_that_is_already_shortest_is_left_alone(self):
+        # Only when canonicalising actually shortens it, the way libpulse has
+        # it. The fixture is the shape that catches an unconditional resolve: a
+        # short name pointing at a long one, where following the link is the
+        # wrong answer.
+        folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        target = folder / ("d" * 80)
+        target.mkdir()
+        link = folder / "s"
+        link.symlink_to(target)
+        self.assertEqual(audio.shortest(str(link)), str(link))
+
+    def test_shorter_is_counted_in_bytes_and_not_in_characters(self):
+        # A socket address holds bytes, so "shorter" has to mean bytes. This
+        # target is fewer characters than the alias and nearly twice as many
+        # bytes: counted as characters it wins and the address built from it is
+        # over the limit the shortening exists to stay under.
+        folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        target = folder / ("\u00e9" * 50)
+        target.mkdir()
+        link = folder / ("a" * 60)
+        link.symlink_to(target)
+        self.assertLess(len(str(target)), len(str(link)))
+        self.assertGreater(len(os.fsencode(str(target))), len(os.fsencode(str(link))))
+        self.assertEqual(audio.shortest(str(link)), str(link))
+
+    def test_a_path_that_is_not_all_there_is_left_alone(self):
+        # `resolve` without strict folds `..` across a component that does not
+        # exist, so an unreachable path becomes a reachable one somewhere else.
+        folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        missing = f"{folder}/absent/../also-absent"
+        self.assertEqual(audio.shortest(missing), missing)
+
+class LinterScriptTests(unittest.TestCase):
+    """The shipped shell script, which has no AST to parse and needs nothing."""
+
+    def test_the_linter_ignores_shell_startup_code_from_the_environment(self):
+        # bash sources $BASH_ENV before the first line of a non-interactive
+        # script, so pinning PATH inside the script is already too late: the
+        # environment has chosen what runs before the script gets a turn.
+        # Privileged mode is what stops it. Verified by hand both ways, and with
+        # the exact script codex used to demonstrate it.
+        self.assertEqual((ROOT / "tools" / "qmllint.sh").read_bytes().split(b"\n")[0],
+                         b"#!/usr/bin/bash -p")
+
+    def test_the_linter_pins_its_own_path(self):
+        # A shell script's every command goes through PATH, so one assignment
+        # covers dirname, mktemp, ln, grep, rm and the linter itself. There is
+        # no AST to check it with, so the text is.
+        lines = (ROOT / "tools" / "qmllint.sh").read_text().splitlines()
+        commands = [number for number, line in enumerate(lines)
+                    if line.strip() and not line.startswith("#!")
+                    and not line.lstrip().startswith("#")
+                    and not line.startswith("set ")]
+        self.assertIn("PATH=/usr/bin:/bin", lines)
+        # Before the first command rather than merely present, and counted over
+        # commands rather than over the file's text: the comment above the
+        # assignment names the programs it covers, and matching on those names
+        # finds the prose instead of the code.
+        self.assertEqual(lines.index("PATH=/usr/bin:/bin"), commands[0])
 
 
 class InterpreterTests(unittest.TestCase):

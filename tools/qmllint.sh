@@ -1,10 +1,24 @@
-#!/usr/bin/bash
+#!/usr/bin/bash -p
 # Qt 6's qmllint over the plugin, with Quickshell's `qs` import alias in place.
 #
 # /usr/bin/qmllint may belong to Qt 5 on some systems, so the Qt 6 one is named
 # explicitly. Warnings about dynamic bar and theme properties are expected: the
 # host injects them at load time and the linter cannot see that far.
 set -euo pipefail
+
+# `-p` on the line above, before anything here runs at all: bash sources
+# $BASH_ENV before the first line of a non-interactive script, so an assignment
+# down here is already too late to be the first thing that happens. Privileged
+# mode is what stops it reading $BASH_ENV and $ENV, and it also drops inherited
+# shell functions, SHELLOPTS and GLOBIGNORE. Checked by hand, both ways.
+#
+# Every program below comes from a directory only root can write, rather than
+# from whatever PATH this was run with. One line covers the lot: dirname, mktemp,
+# ln, grep, rm and the linter itself. This script is run by hand rather than by
+# the bar, so it is not the boundary headset/binaries.py defends, but it ships in
+# the plugin and carries the executable bit, so it holds the same line.
+PATH=/usr/bin:/bin
+export PATH
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 linter=/usr/lib/qt6/bin/qmllint
