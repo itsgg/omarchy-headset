@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import Quickshell
 import Quickshell.Io
 import Quickshell.Bluetooth
 import Quickshell.Services.Pipewire
@@ -108,6 +109,39 @@ Panel {
   // means the widget survives being installed under a different id or cloned.
   readonly property string helperPath:
     decodeURIComponent(Qt.resolvedUrl("headsetctl").toString().replace(/^file:\/\//, ""))
+
+  // What the helper is started with, rather than a copy of whatever this shell
+  // was started with. The helper is launched by the bar, so a PATH or an
+  // LD_PRELOAD that reached the shell would otherwise reach the interpreter that
+  // runs the helper and everything the helper runs after it, and nobody would be
+  // watching when it did. The helper pins its own interpreter in its `#!` line
+  // and finds pactl, pipewire and bluetoothctl under /usr/bin; this is the other
+  // half of that, and the two Processes below are the only things it applies to.
+  //
+  // Named one at a time, because a list of what to leave behind is only ever a
+  // list of what somebody thought of. XDG_RUNTIME_DIR is where the control
+  // socket and the equaliser live, XDG_CACHE_HOME and XDG_STATE_HOME are where
+  // the helper remembers a headset between sessions, HOME is the fallback for
+  // both, and the locale decides how text the helper prints is encoded. The
+  // PULSE_ and PIPEWIRE_ pair are how a machine points its audio clients at a
+  // server that is not the local one; they reach pactl and the filter chain
+  // through the helper, which narrows this list again for each of them.
+  //
+  // What is not here is as deliberate: nothing that decides what a program
+  // loads rather than what it talks to. PULSE_CLIENTCONFIG belongs to that
+  // second kind despite its name, and headset/audio.py says why.
+  readonly property var helperEnvironment: {
+    var carried = ["XDG_RUNTIME_DIR", "XDG_CACHE_HOME", "XDG_STATE_HOME", "HOME",
+                   "LANG", "LC_ALL", "LC_CTYPE",
+                   "PULSE_SERVER", "PULSE_COOKIE",
+                   "PIPEWIRE_REMOTE", "PIPEWIRE_RUNTIME_DIR"]
+    var out = { "PATH": "/usr/bin:/bin" }
+    for (var i = 0; i < carried.length; i++) {
+      var value = Quickshell.env(carried[i])
+      if (value) out[carried[i]] = String(value)
+    }
+    return out
+  }
 
   property var payload: ({ connected: false, state: ({}), controls: ({}), support: ({}),
                            pending: [], ignored: [], error: "" })
@@ -411,6 +445,8 @@ Panel {
   Process {
     id: helper
     command: [root.helperPath, "watch", "--address", root.headsetAddress, "--name", root.headsetName]
+    clearEnvironment: true
+    environment: root.helperEnvironment
     // Only while bluez says there is a headset to talk to. Spawning a helper for a
     // device that is not there is what turns one absent headset into a respawn loop.
     running: root.headsetAddress !== "" && !root.unsupported
@@ -449,6 +485,8 @@ Panel {
   // something switches them, and the codec in use comes from PipeWire live.
   Process {
     id: audioProcess
+    clearEnvironment: true
+    environment: root.helperEnvironment
     stdout: StdioCollector {
       onStreamFinished: {
         var text = String(this.text || "").trim()

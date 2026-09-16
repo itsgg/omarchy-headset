@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Run the Python suite on a machine that has none of what this plugin uses.
 
 CI has broken twice on tests that quietly depended on the machine they were

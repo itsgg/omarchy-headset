@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Find out which controls the hardware actually honours.
 
 The device acknowledges writes it intends to discard, and then reports the old value

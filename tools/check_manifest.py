@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Check manifest.json against what Omarchy's loader and the marketplace need.
 
 Mirrors omarchy-plugin-validate so CI catches a broken manifest without a running
