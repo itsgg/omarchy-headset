@@ -29,6 +29,10 @@ from pathlib import Path
 from PIL import Image, ImageChops
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from headset import binaries  # noqa: E402
+
 PLUGIN = "io.github.itsgg.headset"
 # The border sits just outside the inside edges this finds.
 MARGIN = 3
@@ -44,8 +48,36 @@ CLUSTER_GAP = 40
 MIN_BAND = 3
 
 
+# Run by hand rather than by the bar, so this is not the boundary
+# headset/binaries.py defends. It goes through the same module anyway: it ships
+# in the plugin and carries the executable bit, and one rule about how this
+# plugin starts a program is easier to keep than two.
+#
+# `grim` needs a Wayland display to photograph, and `omarchy-shell` needs the
+# session bus to reach the running shell and `OMARCHY_PATH` to find its own
+# files. That last one is not optional: without it the command prints
+# "OMARCHY_PATH is not set" and does nothing, which is how the first version of
+# this took a photograph of a panel it had never opened.
+CARRIED = ("WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
+           "HYPRLAND_INSTANCE_SIGNATURE", "OMARCHY_PATH", "HOME")
+
+
+def program(name: str) -> str:
+    found = binaries.find(name)
+    if found is None:
+        raise SystemExit(f"{name} is not installed under {binaries.SEARCH_PATH}")
+    return found
+
+
 def shell(*args: str) -> str:
-    return subprocess.run(args, capture_output=True, text=True).stdout
+    # Checked, because it was not: a failing `omarchy-shell open` returned an
+    # empty string, the screenshot was taken of whatever was on screen, and the
+    # only symptom was "no panel on screen" pointing at the headset.
+    done = subprocess.run([program(args[0]), *args[1:]], capture_output=True, text=True,
+                          env=binaries.environment(CARRIED))
+    if done.returncode != 0:
+        raise SystemExit(f"{args[0]}: {(done.stderr or 'failed').strip().splitlines()[0]}")
+    return done.stdout
 
 
 def runs_by_colour(image: Image.Image) -> dict:
@@ -141,7 +173,8 @@ def main() -> int:
         shot = Path(scratch) / "screen.png"
         shell("omarchy-shell", PLUGIN, "open")
         time.sleep(3)
-        subprocess.run(["grim", str(shot)], check=True)
+        subprocess.run([program("grim"), str(shot)], check=True,
+                       env=binaries.environment(CARRIED))
         shell("omarchy-shell", PLUGIN, "close")
         image = Image.open(shot).convert("RGB")
         box = panel_box(image)

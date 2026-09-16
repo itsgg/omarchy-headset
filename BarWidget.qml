@@ -133,7 +133,7 @@ Panel {
   readonly property var helperEnvironment: {
     var carried = ["XDG_RUNTIME_DIR", "XDG_CACHE_HOME", "XDG_STATE_HOME", "HOME",
                    "LANG", "LC_ALL", "LC_CTYPE",
-                   "PULSE_SERVER", "PULSE_COOKIE",
+                   "PULSE_SERVER", "PULSE_COOKIE", "PULSE_RUNTIME_PATH",
                    "PIPEWIRE_REMOTE", "PIPEWIRE_RUNTIME_DIR"]
     var out = { "PATH": "/usr/bin:/bin" }
     for (var i = 0; i < carried.length; i++) {

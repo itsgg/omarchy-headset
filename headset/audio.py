@@ -11,9 +11,11 @@ live on the card, so the listing and the switch go through `pactl`.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
+from pathlib import Path
 
 from . import binaries
 from .errors import HeadsetError
@@ -24,6 +26,10 @@ PROFILE = re.compile(
     r" \(sinks: \d+, sources: \d+, priority: (?P<priority>\d+), available: (?P<available>\w+)\)\s*$"
 )
 CODEC = re.compile(r"codec (?P<codec>[A-Za-z0-9_ +-]+?)\)")
+
+# Where libpulse looks for a PulseAudio running in system mode, after the
+# per-user socket and before anything on the network.
+SYSTEM_SOCKET = "/var/run/pulse/native"
 
 HIGH_FIDELITY = "a2dp"
 HEADSET = "headset"
@@ -93,6 +99,84 @@ def parse_cards(text: str) -> list[dict]:
     return cards
 
 
+def shortest(directory: str) -> str:
+    """A directory, or its canonical form where that is shorter.
+
+    What libpulse does to the same path before it builds a socket address out of
+    it, and for a reason worth copying rather than improving on: a Unix socket
+    address holds about 108 bytes, so a long alias to a short directory is a
+    connection that fails here while libpulse's own lookup would have made it.
+    """
+    try:
+        # Strictly, so a path is only rewritten when every part of it is really
+        # there. Without that, `resolve` folds `..` across a component that does
+        # not exist, and `/run/absent/../user` becomes `/run/user`: an
+        # unreachable socket quietly turned into a reachable one somewhere else.
+        # libpulse keeps the original when realpath fails, and so does this.
+        canonical = str(Path(directory).resolve(strict=True))
+    except OSError:
+        return directory
+    # By what a socket address actually holds, which is bytes. Comparing
+    # characters makes a short ASCII alias lose to a canonical path of fewer but
+    # longer characters, and the address that gets built is the one over the
+    # limit this is here to stay under.
+    if len(os.fsencode(canonical)) < len(os.fsencode(directory)):
+        return canonical
+    return directory
+
+
+def pulse_server() -> str | None:
+    """The servers to name on pactl's own command line, or None if none can be named.
+
+    Naming it is what turns autospawn off, and autospawn is the one path by which
+    a configuration file can still name a program for libpulse to execute:
+    `client.conf` carries `autospawn` and `daemon-binary`, and libpulse does
+    `if (server) c->conf->autospawn = false` before it reads either of them.
+
+    Measured rather than reasoned. With a `client.conf` carrying `autospawn =
+    yes` and a `daemon-binary`, pactl pointed at an unreachable server ran that
+    binary; pointed at the same unreachable server with `--server`, it did not.
+
+    The other way to close it is to pin `PULSE_CLIENTCONFIG` at the system file,
+    which works by throwing away every other setting the user has. That is a
+    worse trade than the thing it fixes.
+
+    This names a server every time rather than only when the local socket is
+    there. An earlier version checked, so as not to override a `default-server`
+    that a machine had set in its own client.conf, and that check put the hole
+    back exactly where it mattered: a socket that is missing is the case where
+    the connection fails, and a failed connection is what autospawn is for. The
+    cost is that a machine whose only pointer to a non-local server lives in
+    client.conf has to name it in `PULSE_SERVER` instead, which is one line and
+    is carried through to here.
+    """
+    named = os.environ.get("PULSE_SERVER")
+    if named:
+        # The user's own, passed through whole: it was already read as a list by
+        # libpulse before this, and it is theirs to write.
+        return named
+    runtime = os.environ.get("PULSE_RUNTIME_PATH")
+    if not runtime:
+        base = os.environ.get("XDG_RUNTIME_DIR")
+        if not base:
+            return None
+        runtime = str(Path(base) / "pulse")
+    runtime = shortest(runtime)
+    # Both, in libpulse's own order. It tries the per-user socket and then the
+    # system-wide one, so naming only the first would take PulseAudio in system
+    # mode away from a machine that had it, which is a regression about
+    # something else again.
+    per_user = Path(runtime) / "native"
+    if any(character.isspace() for character in str(per_user)):
+        # This argument is a whitespace-separated list and libpulse's parser has
+        # no quoting, so a space in the path is not a path with a space in it: it
+        # is a second address. A runtime directory named `/tmp/x tcp:10.0.0.1`
+        # would point pactl at a machine on the network.
+        raise HeadsetError("the runtime directory has a space in it, which pactl "
+                           "would read as the name of a second server")
+    return f"unix:{per_user} unix:{SYSTEM_SOCKET}"
+
+
 def run_pactl(arguments: list[str]) -> str:
     program = binaries.find("pactl")
     if program is None:
@@ -108,10 +192,10 @@ def run_pactl(arguments: list[str]) -> str:
     #
     # `XDG_RUNTIME_DIR` is how pactl finds the server's socket, and `HOME` is
     # where it looks for the cookie if it is ever talking to a PulseAudio that
-    # wants one rather than to PipeWire. `PULSE_SERVER` and `PULSE_COOKIE` are
-    # how somebody points a client at a server that is not the local one; they
-    # were inherited before this, and a machine set up that way should not lose
-    # its audio rows to a change about something else.
+    # wants one rather than to PipeWire. `PULSE_COOKIE` is that cookie named
+    # outright, for a machine pointed at a server that is not the local one;
+    # it was inherited before this, and such a machine should not lose its audio
+    # rows to a change about something else.
     #
     # `PULSE_CLIENTCONFIG` is deliberately not among them, though it is the
     # third variable in the same family. It names the client.conf to read, and a
@@ -119,18 +203,23 @@ def run_pactl(arguments: list[str]) -> str:
     # let one variable name a program for libpulse to run. That is the hole this
     # module is here to close, arriving by the other door.
     #
-    # `~/.config/pulse/client.conf` carries those same two keys and is still
-    # read. Dropping `HOME` does not stop that and was measured not to: with
-    # `HOME` unset entirely, pactl read the file anyway, because libpulse falls
-    # back to the passwd entry to find the home directory. So dropping it would
-    # cost the cookie and close nothing. What is left is a file in the user's
-    # own home, which is not a door this plugin can lock: anything that can
-    # write there can write a shell profile instead.
-    environment = binaries.environment(("XDG_RUNTIME_DIR", "HOME",
-                                        "PULSE_SERVER", "PULSE_COOKIE"),
+    # `~/.config/pulse/client.conf` carries those same two keys and is read
+    # whatever this passes: dropping `HOME` does not stop it, measured, because
+    # libpulse falls back to the passwd entry to find the home directory. What
+    # stops it is naming the server on the command line; see `pulse_server`.
+    environment = binaries.environment(("XDG_RUNTIME_DIR", "HOME", "PULSE_COOKIE"),
                                        LC_ALL="C", LANG="C")
+    # `PULSE_SERVER` is read above and named on the command line instead of being
+    # passed down, because on the command line it also turns autospawn off.
+    server = pulse_server()
+    if server is None:
+        # Nothing can be named, so nothing is run: leaving the server for
+        # libpulse to choose is the branch that lets a client.conf autospawn a
+        # daemon-binary. Everything else in the helper needs this directory too.
+        raise HeadsetError("XDG_RUNTIME_DIR is not set, so there is no audio server to ask")
+    named = ["--server", server]
     try:
-        done = subprocess.run([program, *arguments], capture_output=True, text=True,
+        done = subprocess.run([program, *named, *arguments], capture_output=True, text=True,
                               timeout=10, env=environment)
     except FileNotFoundError as error:
         raise HeadsetError("pactl is not installed, so the audio profile cannot be read") from error
