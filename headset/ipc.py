@@ -23,6 +23,38 @@ from pathlib import Path
 from .errors import HeadsetError
 
 
+# The widest state line this protocol publishes, measured with every control the
+# richest driver declares and every field filled in, is about 1.6 kB. A partial
+# line longer than this is not a line we are a few bytes short of: it is a peer
+# that has stopped sending newlines, and holding it is a buffer that grows for as
+# long as it keeps not sending one.
+#
+# The peer here is always another of the user's own processes, because the
+# directory is 0700 and stdin comes from the bar. This is not the radio. It is
+# bounded because it is the same shape as the buffer that the radio could grow,
+# and the next person to read this file should not have to work out which.
+MAX_LINE = 256 * 1024
+
+
+def take_lines(buffer: bytes) -> tuple[list[bytes], bytes]:
+    """Whole lines out of a stream buffer, and what is left, bounded.
+
+    Lines come back as bytes: one of the callers relays them onward untouched,
+    and decoding and re-encoding would not give back what arrived.
+    """
+    lines = []
+    while b"\n" in buffer:
+        line, buffer = buffer.split(b"\n", 1)
+        lines.append(line)
+    if len(buffer) > MAX_LINE:
+        # None of it is usable. It is one unfinished line, already longer than
+        # any line this protocol sends, so what is kept would never parse. The
+        # next newline resynchronises, and a line that fails to parse is a case
+        # every reader here already handles.
+        buffer = b""
+    return lines, buffer
+
+
 def runtime_dir() -> Path:
     base = os.environ.get("XDG_RUNTIME_DIR")
     if not base:

@@ -23,6 +23,7 @@ import time
 from . import audio, drivers, equaliser, ipc
 from .device import Device
 from .errors import HeadsetError, UnsupportedDevice
+from .session import READS_PER_TURN
 from .state import State
 
 BACKOFF_START = 2.0
@@ -95,7 +96,7 @@ class Client:
 
     def read_lines(self) -> list[str]:
         lines = []
-        while True:
+        for _ in range(READS_PER_TURN):
             try:
                 chunk = self.sock.recv(4096)
             except BlockingIOError:
@@ -107,9 +108,8 @@ class Client:
                 self.alive = False
                 break
             self.inbox += chunk
-            while b"\n" in self.inbox:
-                line, self.inbox = self.inbox.split(b"\n", 1)
-                lines.append(line.decode("utf-8", "replace"))
+            found, self.inbox = ipc.take_lines(self.inbox)
+            lines.extend(line.decode("utf-8", "replace") for line in found)
         return lines
 
     def close(self) -> None:
@@ -130,7 +130,7 @@ class Stdin:
 
     def read_lines(self) -> list[str]:
         lines = []
-        while True:
+        for _ in range(READS_PER_TURN):
             try:
                 chunk = os.read(self.fd, 4096)
             except BlockingIOError:
@@ -144,9 +144,8 @@ class Stdin:
                 self.open = False
                 break
             self.buffer += chunk
-            while b"\n" in self.buffer:
-                line, self.buffer = self.buffer.split(b"\n", 1)
-                lines.append(line.decode("utf-8", "replace"))
+            found, self.buffer = ipc.take_lines(self.buffer)
+            lines.extend(line.decode("utf-8", "replace") for line in found)
         return lines
 
 
@@ -691,8 +690,8 @@ def follow(sock: socket.socket, stdin: Stdin | None) -> int:
             if chunk == b"":
                 return 0  # the owner finished; the caller decides whether to retry
             buffer += chunk
-            while b"\n" in buffer:
-                line, buffer = buffer.split(b"\n", 1)
+            found, buffer = ipc.take_lines(buffer)
+            for line in found:
                 try:
                     sys.stdout.buffer.write(line + b"\n")
                     sys.stdout.buffer.flush()

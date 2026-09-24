@@ -29,8 +29,8 @@ def _read_state(sock: socket.socket, deadline: float, buffer: bytes = b"") -> tu
         if not chunk:
             return None, buffer
         buffer += chunk
-        while b"\n" in buffer:
-            line, buffer = buffer.split(b"\n", 1)
+        found, buffer = ipc.take_lines(buffer)
+        for line in found:
             text = line.decode("utf-8", "replace").strip()
             if not text.startswith("{"):
                 continue

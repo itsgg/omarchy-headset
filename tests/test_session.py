@@ -273,6 +273,64 @@ class DisciplineTests(unittest.TestCase):
             reply_code(b"")
 
 
+class HostileHeadsetTests(unittest.TestCase):
+    """A headset is a radio, not a trusted peer.
+
+    Pairing says a device was once approved on this machine. It does not say the
+    thing on the other end of the link is still that device, or that it is
+    behaving. The read path has to hold whatever arrives.
+    """
+
+    def test_a_frame_that_is_never_closed_does_not_grow_the_helper(self):
+        # The report: a header with no trailer after it, and everything since is
+        # kept. Measured before the bound went in, this reached 12 MB in four
+        # rounds of this loop and was still climbing.
+        s = session()
+        for _ in range(4):
+            s.sock.inbox = bytes((framing.HEADER,)) + b"\x00" * (4 * 1024 * 1024)
+            s._receive()
+            self.assertLessEqual(len(s.buffer), framing.MAX_FRAME)
+
+    def test_a_headset_that_always_has_more_cannot_hold_the_helper(self):
+        # Bounding the buffer is not enough on its own. The read loop ran until
+        # the socket had nothing left, so a peer that always has another chunk
+        # ready kept it for ever: memory stayed flat and everything else in the
+        # helper stopped, which is no request written, no deadline fired and no
+        # answer to the panel. Measured before the bound, this did not return.
+        s = session()
+
+        class Endless:
+            def recv(self, size):
+                return b"\x00" * size
+
+            def fileno(self):
+                return -1
+
+        s.sock = Endless()
+        s._receive()
+        self.assertLessEqual(len(s.buffer), framing.MAX_FRAME)
+
+    def test_the_headset_is_still_heard_after_it_wedges_the_stream(self):
+        # Bounded is not enough on its own: the session has to recover, or a
+        # burst of noise would take the panel down until the headset reconnects.
+        s = session()
+        s.sock.inbox = bytes((framing.HEADER,)) + b"\x00" * (512 * 1024)
+        # Pumped, not drained in one call: a turn reads a bounded number of
+        # times and hands back, which is what keeps the rest of the helper alive
+        # while a headset floods the link.
+        turns = 0
+        while s.sock.inbox:
+            s._receive()
+            turns += 1
+            self.assertLess(turns, 100, "a turn is reading more than it should")
+            self.assertLessEqual(len(s.buffer), framing.MAX_FRAME)
+        seen = []
+        s._handle = seen.append
+        s.sock.deliver(framing.Message(framing.COMMAND_1, 1, bytes.fromhex("01 00")))
+        s._receive()
+        self.assertEqual([message.payload for message in seen], [bytes.fromhex("01 00")])
+
+
 if __name__ == "__main__":
     unittest.main()
 
