@@ -80,5 +80,64 @@ class FramingTests(unittest.TestCase):
         self.assertEqual(framing.split(b"\x00\x01\x02"), ([], b""))
 
 
+class BoundTests(unittest.TestCase):
+    """What is kept when a headset opens a frame and never closes it.
+
+    The link is long-lived and the helper outlives the panel, so a buffer that
+    grows with the bytes is a helper that is eventually killed for its memory.
+    A paired headset is not a trusted peer: it is a radio that anything within
+    range can be.
+    """
+
+    def test_an_unfinished_frame_cannot_grow_the_buffer_without_end(self):
+        rest = b""
+        # Sixteen times the cap, in the chunks the socket actually delivers.
+        for _ in range(16 * framing.MAX_FRAME // 4096):
+            frames, rest = framing.split(rest + bytes((framing.HEADER,)) + b"\x00" * 4095)
+            self.assertEqual(frames, [])
+        self.assertLessEqual(len(rest), framing.MAX_FRAME)
+
+    def test_a_real_frame_behind_a_wedged_one_is_still_read(self):
+        # The point of resynchronising rather than dropping everything: the
+        # headset that wedged the stream is the one we still need to hear from.
+        #
+        # Both halves are asserted. Delivering the frame on its own proves
+        # nothing, because the code before the bound delivered it too, by
+        # keeping every byte since the wedge began; what is new is delivering it
+        # while what is kept stays small.
+        rest = b""
+        for _ in range(4):
+            frames, rest = framing.split(rest + bytes((framing.HEADER,)) + b"\x00" * 4095)
+            self.assertLessEqual(len(rest), framing.MAX_FRAME)
+        frames, rest = framing.split(rest + REAL_INIT_REPLY)
+        self.assertIn(REAL_INIT_REPLY, frames)
+        self.assertEqual(framing.decode(frames[-1]).payload,
+                         bytes.fromhex("01 00 03 00 20 16 00 00"))
+
+    def test_a_frame_split_across_chunks_still_completes(self):
+        # The bound must not cost the ordinary case, which is a frame arriving
+        # in two pieces because that is what a radio does.
+        first, second = REAL_INIT_REPLY[:9], REAL_INIT_REPLY[9:]
+        frames, rest = framing.split(first)
+        self.assertEqual(frames, [])
+        self.assertEqual(rest, first)
+        frames, rest = framing.split(rest + second)
+        self.assertEqual(frames, [REAL_INIT_REPLY])
+        self.assertEqual(rest, b"")
+
+    def test_the_largest_frame_the_protocol_can_express_survives(self):
+        # 255 bytes of firmware string behind a one-byte length is the longest
+        # payload there is, and every byte of it escaped is the worst the wire
+        # can carry. The cap has to sit above that or it would eat real traffic.
+        payload = bytes([0x05, 0x02, 0xFF]) + bytes((framing.ESCAPE,)) * 255
+        whole = framing.encode(framing.Message(framing.COMMAND_1, 1, payload))
+        self.assertLess(len(whole), framing.MAX_FRAME)
+        frames, rest = framing.split(whole[:-1])
+        self.assertEqual(frames, [])
+        frames, rest = framing.split(rest + whole[-1:])
+        self.assertEqual(framing.decode(frames[0]).payload, payload)
+        self.assertEqual(rest, b"")
+
+
 if __name__ == "__main__":
     unittest.main()

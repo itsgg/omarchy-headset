@@ -30,6 +30,24 @@ COMMAND_2 = 0x0E
 HEADER_LEN = 6  # type, seq, and the four length bytes
 MIN_FRAME = 1 + HEADER_LEN + 1 + 1  # header, fixed fields, checksum, trailer
 
+# The length field above is four bytes, so the framing could carry a payload of
+# any size. Nothing this driver asks for comes near it: the largest payload it
+# has is a firmware string behind a single length byte, so 255 bytes plus the
+# three in front of them, and even with every byte of the body escaped that is
+# 532 bytes on the wire. The largest frame in the captured traffic is 17.
+#
+# So this is a bound on what this driver reads, not on what the framing can
+# express, and it is set where it is because a headset sending more than eight
+# times the largest frame anyone has seen is not talking to this plugin.
+#
+# So a span longer than this with no trailer in it is not a frame we are a few
+# bytes short of. It is a headset that opened a frame and never closed it, and
+# holding on to it is a buffer that grows for as long as the bytes keep coming.
+# The link is long-lived and the helper outlives the panel, so that ends in a
+# helper killed for its memory. fastpair has had the same bound since it was
+# written, for the same reason.
+MAX_FRAME = 4096
+
 
 @dataclass(frozen=True)
 class Message:
@@ -105,7 +123,10 @@ def split(buffer: bytes) -> tuple[list[bytes], bytes]:
     """Pull every complete frame out of a stream buffer; return them and the rest.
 
     Leading noise before a header is dropped, because a resynchronising radio link
-    is the normal case and there is nothing useful to do with the fragment.
+    is the normal case and there is nothing useful to do with the fragment. An
+    unfinished frame longer than `MAX_FRAME` is dropped for the same reason: no
+    frame is that long, so it is noise that happens to start with a header byte,
+    and what is kept is bounded whatever the headset sends.
     """
     frames = []
     while True:
@@ -114,7 +135,16 @@ def split(buffer: bytes) -> tuple[list[bytes], bytes]:
             return frames, b""
         end = buffer.find(bytes((TRAILER,)), start + 1)
         if end < 0:
-            return frames, buffer[start:]
+            rest = buffer[start:]
+            if len(rest) <= MAX_FRAME:
+                return frames, rest
+            # Resynchronise inside the newest window rather than dropping the
+            # lot: a real frame whose trailer has not arrived yet is never more
+            # than 532 bytes, so it is always inside the window that is kept.
+            window = rest[-MAX_FRAME:]
+            resync = window.find(bytes((HEADER,)))
+            return frames, window[resync:] if resync >= 0 else b""
+
         # A frame is the shortest span ending at this trailer. A stray header
         # delivered by the radio just before a good frame would otherwise swallow
         # it whole: the span fails its checksum and the real frame goes with it.

@@ -37,6 +37,15 @@ FAILED = "failed"
 # Bluetooth has none of these, and an AttributeError four frames down reads as a
 # bug in this program rather than as a platform that cannot do Bluetooth at all.
 # It is also what lets a test drive the whole stack on a fake socket anywhere.
+# How many reads one turn may take before it hands control back. A headset that
+# always has another chunk ready would otherwise hold this loop for ever. The
+# buffer stays bounded either way, but nothing else in the helper runs while it
+# spins: no request is written, no deadline fires, and the panel stops being
+# answered. The caller selects on the socket and comes straight back, so a turn
+# that ends early costs a pass through the loop and loses nothing. fastpair has
+# had the same bound, and the same number, since it was written.
+READS_PER_TURN = 32
+
 AF_BLUETOOTH = getattr(socket, "AF_BLUETOOTH", None)
 BTPROTO_RFCOMM = getattr(socket, "BTPROTO_RFCOMM", None)
 
@@ -255,7 +264,7 @@ class Session:
     # -------------------------------------------------------------------- reading
 
     def _receive(self) -> None:
-        while True:
+        for _ in range(READS_PER_TURN):
             try:
                 chunk = self.sock.recv(4096)
             except BlockingIOError:

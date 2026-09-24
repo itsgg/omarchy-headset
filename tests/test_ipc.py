@@ -300,5 +300,37 @@ class ProtocolGuardTests(unittest.TestCase):
         self.assertEqual(device.state["protocol"], "v2")
 
 
+class LineTests(unittest.TestCase):
+    """Reading lines off a stream that may never send another newline."""
+
+    def test_whole_lines_come_out_and_the_rest_is_kept(self):
+        lines, rest = ipc.take_lines(b'{"a": 1}\n{"b": 2}\n{"c"')
+        self.assertEqual(lines, [b'{"a": 1}', b'{"b": 2}'])
+        self.assertEqual(rest, b'{"c"')
+
+    def test_a_line_split_across_chunks_still_arrives(self):
+        # The bound must not cost the ordinary case: a line arriving in two
+        # reads is what a socket does under any load at all.
+        lines, rest = ipc.take_lines(b'{"half"')
+        self.assertEqual(lines, [])
+        lines, rest = ipc.take_lines(rest + b': 1}\n')
+        self.assertEqual(lines, [b'{"half": 1}'])
+        self.assertEqual(rest, b"")
+
+    def test_a_peer_that_sends_no_newline_cannot_grow_the_buffer(self):
+        rest = b""
+        for _ in range(16):
+            lines, rest = ipc.take_lines(rest + b"x" * (ipc.MAX_LINE // 4))
+            self.assertEqual(lines, [])
+            self.assertLessEqual(len(rest), ipc.MAX_LINE)
+
+    def test_a_whole_line_after_a_dropped_one_is_still_read(self):
+        rest = b"x" * (ipc.MAX_LINE + 1)
+        lines, rest = ipc.take_lines(rest)
+        self.assertEqual(rest, b"")
+        lines, rest = ipc.take_lines(rest + b'{"after": true}\n')
+        self.assertEqual(lines, [b'{"after": true}'])
+
+
 if __name__ == "__main__":
     unittest.main()
