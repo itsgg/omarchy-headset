@@ -48,7 +48,14 @@ configuration is read or written.
   add, no D-Bus bindings. The helper runs `/usr/bin/python3`, and finds `pactl`,
   `pipewire` and `bluetoothctl` under `/usr/bin` rather than on `PATH`: the bar
   starts it with nobody watching, so what it runs is not left to whatever the
-  shell happened to be started with.
+  shell happened to be started with. A program it asks a question is bounded
+  while it answers: a deadline, its output read live and the program stopped
+  past 8 MB, and a stop meaning its whole process group killed and reaped.
+  A program it asks is also told by the kernel to die with the helper, so a
+  helper killed outright does not leave it behind. The bar bounds the helper the
+  same way when it reads the audio card: the answer, on both stdout and
+  stderr, is watched as it arrives and the helper is killed past a million
+  characters or after 20 s, and a stopped answer is never parsed.
 - PipeWire, for the codec and profile rows. The equaliser additionally needs its
   filter-chain module at `/usr/share/pipewire/filter-chain.conf`, part of the
   stock `pipewire` package on Arch. Without it the equaliser is not offered.

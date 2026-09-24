@@ -180,7 +180,7 @@ class CallSiteTests(unittest.TestCase):
             merged.pop(name)
         with patch.object(binaries, "find", return_value=f"/usr/bin/{program}"), \
              patch.dict(os.environ, merged, clear=False), \
-             patch("subprocess.run", side_effect=record):
+             patch("headset.binaries.run", side_effect=record):
             for name in unset:
                 os.environ.pop(name, None)
             call()
@@ -238,7 +238,7 @@ class CallSiteTests(unittest.TestCase):
         # raises the same thing, and that is the run this refuses to make.
         with patch.object(binaries, "find", return_value="/usr/bin/pactl"), \
              patch.dict(os.environ, {}, clear=True), \
-             patch("subprocess.run") as ran:
+             patch("headset.binaries.run") as ran:
             with self.assertRaises(HeadsetError):
                 audio.run_pactl(["list", "cards"])
         ran.assert_not_called()
@@ -250,7 +250,7 @@ class CallSiteTests(unittest.TestCase):
         # over from the first to the second and connects.
         with patch.object(binaries, "find", return_value="/usr/bin/pactl"), \
              patch.dict(os.environ, {"XDG_RUNTIME_DIR": "/tmp/x tcp:10.0.0.1"}, clear=True), \
-             patch("subprocess.run") as ran:
+             patch("headset.binaries.run") as ran:
             with self.assertRaises(HeadsetError):
                 audio.run_pactl(["list", "cards"])
         ran.assert_not_called()

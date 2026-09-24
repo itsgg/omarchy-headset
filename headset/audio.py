@@ -219,8 +219,7 @@ def run_pactl(arguments: list[str]) -> str:
         raise HeadsetError("XDG_RUNTIME_DIR is not set, so there is no audio server to ask")
     named = ["--server", server]
     try:
-        done = subprocess.run([program, *named, *arguments], capture_output=True, text=True,
-                              timeout=10, env=environment)
+        done = binaries.run([program, *named, *arguments], timeout=10, env=environment)
     except FileNotFoundError as error:
         raise HeadsetError("pactl is not installed, so the audio profile cannot be read") from error
     except (OSError, subprocess.SubprocessError) as error:

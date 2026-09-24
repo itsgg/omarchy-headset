@@ -35,9 +35,8 @@ def connected_devices() -> list[dict]:
     try:
         # bluez answers on the system bus, at a socket path of its own, so this
         # one needs nothing carried over from here at all.
-        listing = subprocess.run([program, "devices", "Connected"],
-                                 capture_output=True, text=True, timeout=10,
-                                 env=binaries.environment())
+        listing = binaries.run([program, "devices", "Connected"], timeout=10,
+                               env=binaries.environment())
     except (OSError, subprocess.SubprocessError) as error:
         raise HeadsetError(f"could not ask bluez which devices are connected: {error}") from error
     # A driver is now found for anything, because the fallback is identified by a

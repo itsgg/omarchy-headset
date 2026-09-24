@@ -481,14 +481,82 @@ Panel {
     }
   }
 
+  // A reading is bounded twice. Its collector watches the answer as it
+  // arrives and kills the helper past the cap, never parsing what it took, and
+  // a deadline kills a helper that has not answered at all: the helper's own
+  // pactl call gives up at ten seconds, so one that is still running after
+  // twenty is wedged somewhere else, and left alone it would hold the audio
+  // rows for ever, since a reading steps aside while one is in flight.
+  component CappedCollector: StdioCollector {
+    id: collector
+    required property var proc
+    // Characters, not bytes: a JavaScript string counts UTF-16 units, so the
+    // most this holds is three times as many bytes.
+    property int cap: 1048576
+    // Set here past the cap and by the deadline below; reset for each run.
+    property bool stopped: false
+    // How much of the text has been handed out through `arrived`, for a
+    // collector that acts on lines as they come rather than on the whole.
+    property int handed: 0
+    signal arrived(string added)
+    waitForEnd: false
+    onTextChanged: {
+      if (collector.stopped) return
+      if (collector.text.length > collector.cap) {
+        // Both of the process's collectors, whichever one overflowed: what
+        // the other one holds is the answer of a reading that was stopped.
+        collector.stopped = true
+        if (collector.proc.stdout && collector.proc.stdout.stopped !== undefined) collector.proc.stdout.stopped = true
+        if (collector.proc.stderr && collector.proc.stderr.stopped !== undefined) collector.proc.stderr.stopped = true
+        collector.proc.signal(9)
+        root.helperError = "The audio reading was too large and was stopped"
+        return
+      }
+      var added = collector.text.substring(collector.handed)
+      collector.handed = collector.text.length
+      if (added.length > 0) collector.arrived(added)
+    }
+  }
+
+  function stopAudioReading(reason) {
+    if (!audioProcess.running) return
+    audioProcess.stdout.stopped = true
+    audioProcess.stderr.stopped = true
+    audioProcess.signal(9)
+    root.helperError = reason
+  }
+
+  Timer {
+    id: audioDeadline
+    interval: 20000
+    repeat: false
+    onTriggered: root.stopAudioReading("The audio reading did not finish and was stopped")
+  }
+
   // The card reading. Short-lived and on demand: profiles change only when
   // something switches them, and the codec in use comes from PipeWire live.
   Process {
     id: audioProcess
     clearEnvironment: true
     environment: root.helperEnvironment
-    stdout: StdioCollector {
+    // Started and stopped by hand rather than bound: a non-repeating Timer
+    // writes its own running property when it fires.
+    onRunningChanged: {
+      if (audioProcess.running) {
+        audioProcess.stdout.stopped = false
+        audioProcess.stdout.handed = 0
+        audioProcess.stderr.stopped = false
+        audioProcess.stderr.handed = 0
+        audioProcess.stderr.pending = ""
+        audioDeadline.restart()
+      } else {
+        audioDeadline.stop()
+      }
+    }
+    stdout: CappedCollector {
+      proc: audioProcess
       onStreamFinished: {
+        if (stopped) return
         var text = String(this.text || "").trim()
         if (text.charAt(0) !== "{") return
         // A reading belongs to the headset it was asked about. Swapping headsets
@@ -501,10 +569,22 @@ Panel {
         }
       }
     }
-    stderr: SplitParser {
-      onRead: function(line) {
-        var text = String(line || "").trim()
-        if (text.length > 0) root.helperError = text.replace(/^headsetctl: /, "")
+    // Capped like stdout: a SplitParser holds a line until its newline and
+    // has no cap of its own. Lines are taken as they complete, and once a
+    // reading has been stopped its explanation is not overwritten by whatever
+    // the helper had left to say.
+    stderr: CappedCollector {
+      proc: audioProcess
+      property string pending: ""
+      onArrived: function(added) {
+        if (audioProcess.stdout.stopped) return
+        pending += added
+        var lines = pending.split("\n")
+        pending = lines.pop()
+        for (var i = 0; i < lines.length; i++) {
+          var text = lines[i].trim()
+          if (text.length > 0) root.helperError = text.replace(/^headsetctl: /, "")
+        }
       }
     }
     // A profile switch tears the link down and brings it back, so the reading
